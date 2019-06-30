@@ -6,7 +6,11 @@
 
 #include <errno.h>
 
+#include <list>
+#include <memory>
+
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 
 namespace netpull {
 
@@ -61,6 +65,38 @@ namespace ansi {
     kBgCyan{"\033[46m"},
     kBgWhite{"\033[47m"},
     kBold{"\033[1m"},
-    kReset{"\033[0m"};
-  }
+    kReset{"\033[0m"},
+
+    kMoveUp{"\033[A"},
+    kClearToEos{"\033[J"};
+}
+
+class ConsoleLine {
+public:
+  ConsoleLine(const ConsoleLine& other)=delete;
+  ConsoleLine(ConsoleLine&& other)=delete;
+  ~ConsoleLine();
+
+  static std::unique_ptr<ConsoleLine> Claim();
+
+  // XXX: This is kinda ugly but I don't want to give LogGenericString all private access
+  // via friend.
+  static void InternalEraseAll();
+  static void InternalDrawAll();
+
+  static void DrawAll();
+
+  static size_t count() { return lines.size(); }
+
+  void Update(std::string line);
+
+private:
+  ConsoleLine() {}
+
+  std::list<ConsoleLine*>::iterator it;
+  std::string content;
+
+  static std::list<ConsoleLine*> lines;
+};
+
 }

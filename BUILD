@@ -59,5 +59,7 @@ cc_binary(
     ':netpull_cc_proto',
     '@com_google_absl//absl/flags:flag',
     '@com_google_absl//absl/flags:parse',
+    '@com_google_absl//absl/synchronization',
+    '@com_google_absl//absl/time',
   ],
 )

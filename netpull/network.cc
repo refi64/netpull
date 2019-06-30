@@ -287,6 +287,9 @@ std::optional<size_t> SocketConnection::ReadBytes(std::byte* bytes, size_t size)
       return static_cast<size_t>(bytes_read);
     } else if (bytes_read == -1 && errno != EINTR) {
       LogErrno("Failed to read from connection with %s", absl::FormatStreamed(peer_));
+      if (errno == EPIPE) {
+        alive_ = false;
+      }
       return {};
     }
   }
@@ -315,6 +318,9 @@ std::optional<size_t> SocketConnection::SendBytes(const std::byte* bytes, size_t
       return static_cast<size_t>(bytes_written);
     } else if (bytes_written == -1 && errno != EINTR) {
       LogErrno("Failed to write to connection with %s", absl::FormatStreamed(peer_));
+      if (errno == EPIPE) {
+        alive_ = false;
+      }
       return {};
     }
   }

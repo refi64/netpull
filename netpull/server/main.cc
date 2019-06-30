@@ -62,6 +62,10 @@ public:
     path(std::move(path)) {}
 
   void Run() override {
+    if (!conn->alive()) {
+      return;
+    }
+
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
 
@@ -100,8 +104,10 @@ public:
 
     resp.mutable_object()->mutable_transfer()->set_sha256(Hexlify(digest));
 
-    absl::MutexLock lock(conn_mutex);
-    conn->SendProtobufMessage(resp);
+    if (conn->alive()) {
+      absl::MutexLock lock(conn_mutex);
+      conn->SendProtobufMessage(resp);
+    }
   }
 
 private:
@@ -290,6 +296,7 @@ ABSL_FLAG(std::vector<IpRange>, deny_ip_ranges, {},
 
 int main(int argc, char** argv) {
   GOOGLE_PROTOBUF_VERIFY_VERSION;
+  signal(SIGPIPE, SIG_IGN);
 
   std::vector<char*> c_args = absl::ParseCommandLine(argc, argv);
   if (c_args.size() != 1) {

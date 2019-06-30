@@ -179,12 +179,14 @@ public:
   bool SendProtobufMessage(const google::protobuf::Message& message);
 
   const IpAddress& peer() const { return peer_; }
+  bool alive() { return alive_; }
   const ScopedFd& fd() const { return fd_; }
 
 private:
   SocketConnection(IpAddress peer, ScopedFd fd): peer_(std::move(peer)), fd_(std::move(fd)) {}
 
   IpAddress peer_;
+  bool alive_ = true;
   ScopedFd fd_;
 
   friend class SocketServer;

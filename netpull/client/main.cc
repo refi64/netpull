@@ -9,6 +9,8 @@
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/synchronization/notification.h"
+#include "absl/time/time.h"
 
 #include "netpull/console.h"
 #include "netpull/network.h"
@@ -42,19 +44,22 @@ public:
     proto::PullRequest req;
     proto::PullRequest::PullFile* file = req.mutable_file();
     file->set_id(transfer.id());
+    LogVerbose("Requesting %s", transfer.id());
 
     if (!conn->SendProtobufMessage(req)) {
       return;
     }
 
+    auto line = ConsoleLine::Claim();
+
     constexpr size_t kSpliceBuffer = 16 * 1024;
 
     uint64_t total_bytes = 0;
 
-    LogVerbose("Starting transfer of %s", path);
+    line->Update(absl::StrFormat("Starting transfer of %s", path));
 
     while (total_bytes < transfer.bytes()) {
-      LogVerbose("Splicing for %s, read %d bytes of %d", path, total_bytes, transfer.bytes());
+      line->Update(absl::StrFormat("Splicing for %s, read %d bytes of %d", path, total_bytes, transfer.bytes()));
 
       ssize_t expected_bytes = splice(*conn->fd(), nullptr, *write_end, nullptr, kSpliceBuffer,
                                       SPLICE_F_MOVE | SPLICE_F_MORE);
@@ -81,8 +86,6 @@ public:
     }
 
     fsync(*fd);
-
-    LogVerbose("Finished transfer of %s", path);
 
     // TODO: integrity
   }
@@ -185,12 +188,24 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   }
 }
 
+void ConsoleUpdateThread(std::unique_ptr<ConsoleLine> status_line,
+                         const absl::Notification& notification) {
+  status_line->Update("Doing stuff...");
+
+  while (!notification.WaitForNotificationWithTimeout(absl::Milliseconds(100))) {
+    ConsoleLine::DrawAll();
+  }
+
+  status_line->Update("Done!");
+}
+
 ABSL_FLAG(bool, verbose, false, "Be verbose");
 ABSL_FLAG(IpLocation, server, IpLocation({127, 0, 0, 1}), "The server to connect to");
 ABSL_FLAG(int, workers, 4, "The default number of file forwarding workers to use");
 
 int main(int argc, char** argv) {
   GOOGLE_PROTOBUF_VERIFY_VERSION;
+  signal(SIGPIPE, SIG_IGN);
 
   std::vector<char*> c_args = absl::ParseCommandLine(argc, argv);
   if (c_args.size() != 3) {
@@ -221,6 +236,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  absl::Notification console_update_notification;
+  std::thread console_update_thread(ConsoleUpdateThread, ConsoleLine::Claim(),
+                                    std::ref(console_update_notification));
+
   SubmissionKey key;
 
   WorkerPool pool(absl::GetFlag(FLAGS_workers));
@@ -243,15 +262,18 @@ int main(int argc, char** argv) {
     if (resp.has_object()) {
       proto::PullResponse::PullObject pull = resp.object();
 
-      LogInfo("Pull: %s", pull.path());
+      /* LogInfo("Pull: %s", pull.path()); */
       assert(pull.path()[0] != '/');
       HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key);
     } else if (resp.has_started()) {
       LogInfo("Pull started, job ID: %s", resp.started().job());
     } else if (resp.has_finished()) {
-      LogInfo("Done");
+      LogInfo("Shutting down...");
       pool.Done();
       pool.WaitForCompletion();
+
+      console_update_notification.Notify();
+      console_update_thread.join();
       return 0;
     } else if (resp.has_error()) {
       LogError("Server returned error: %s", resp.error().message());
