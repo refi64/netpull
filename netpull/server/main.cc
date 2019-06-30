@@ -75,7 +75,7 @@ public:
       return;
     }
 
-    constexpr int kBufferSize = 2048;
+    constexpr int kBufferSize = 64 * 1024;
     std::array<char, kBufferSize> buffer;
 
     while (is) {

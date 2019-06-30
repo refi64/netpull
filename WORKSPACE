@@ -14,10 +14,10 @@ git_repository(
 
 git_repository(
   name = 'boringssl',
+  remote = 'https://github.com/google/boringssl',
   # branch = 'chromium-stable-with-bazel',
   commit = '420fdf45d1a118f2cb723497f4110b7a4fb0d854',
   shallow_since = '1560187604 +0000',
-  remote = 'https://boringssl.googlesource.com/boringssl',
 )
 
 git_repository(
