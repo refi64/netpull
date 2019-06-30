@@ -1,0 +1,94 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+syntax = "proto3";
+
+package netpull.proto;
+
+import "google/protobuf/timestamp.proto";
+
+message PullRequest {
+  message PullStart {
+    string path = 1;
+  }
+
+  message PullFile {
+    string id = 1;
+  }
+
+  oneof request {
+    PullStart start = 1;
+    PullFile file = 2;
+  }
+}
+
+message PullResponse {
+  message Started {
+    string job = 1;
+  }
+
+  message Finished {
+    int64 total = 1;
+  }
+
+  message PullObject {
+    enum Type {
+      kTypeDirectory = 0;
+      kTypeFile = 1;
+      kTypeSymlink = 2;
+    };
+
+    message Ownership {
+      int32 uid = 1;
+      int32 gid = 2;
+      string user = 3;
+      string group = 4;
+    }
+
+    message Times {
+      google.protobuf.Timestamp access = 1;
+      google.protobuf.Timestamp modify = 2;
+      google.protobuf.Timestamp birth = 3;
+    }
+
+    message FileTransferInfo {
+      string sha256 = 1;
+      int32 bytes = 2;
+      string id = 3;
+    }
+
+    message NonlinkData {
+      int32 perms = 1;
+    }
+
+    message SymlinkData {
+      string target = 1;
+      bool relative_to_root = 2;
+    }
+
+    int64 number = 1;
+    string path = 2;
+    Type type = 3;
+    Ownership owner = 4;
+    Times times = 5;
+    // Unset for directories / symlinks.
+    FileTransferInfo transfer = 6;
+    oneof data {
+      // Permissions don't apply to symlinks.
+      NonlinkData nonlink = 7;
+      SymlinkData symlink = 8;
+    }
+  }
+
+  message Error {
+    string message = 1;
+  }
+
+  oneof response {
+    Started started = 1;
+    Finished finished = 2;
+    PullObject object = 3;
+    Error error = 4;
+  }
+}
