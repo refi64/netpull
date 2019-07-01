@@ -403,7 +403,7 @@ void ConsoleUpdateThread(std::unique_ptr<ConsoleLine> status_line,
 
     std::ostringstream ss;
     ss << "[" << total_items_transferred.load() << "/" << total_items.load() << "] transferred"
-       << " at " << std::setprecision(2) << mbps << " MBps";
+       << " at " << std::setprecision(2) << std::fixed << mbps << " MBps";
     status_line->Update(ss.str());
     ConsoleLine::DrawAll();
 
