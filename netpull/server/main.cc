@@ -54,12 +54,21 @@ std::string RandomId() {
   return Hexlify(bytes);
 }
 
+enum class TaskPriority {
+  kFileIntegrity = 0,
+  kFileStream,
+};
+
 class FileIntegrityTask : public Task {
 public:
   FileIntegrityTask(SubmissionKey* key, proto::PullResponse resp, absl::Mutex* conn_mutex,
                     SocketConnection* conn, Path path):
     Task(key), resp(std::move(resp)), conn_mutex(conn_mutex), conn(conn),
     path(std::move(path)) {}
+
+  int priority() const override {
+    return static_cast<int>(TaskPriority::kFileIntegrity);
+  }
 
   void Run() override {
     if (!conn->alive()) {
@@ -121,6 +130,10 @@ class FileStreamTask : public Task {
 public:
   FileStreamTask(SubmissionKey* key, SocketConnection conn, Path path, uint64_t bytes):
     Task(key), conn(std::move(conn)), path(path), bytes(bytes) {}
+
+  int priority() const override {
+    return static_cast<int>(TaskPriority::kFileStream);
+  }
 
   void Run() override {
     ScopedFd fd;

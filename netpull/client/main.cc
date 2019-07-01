@@ -46,7 +46,7 @@ public:
     columns--;
 
     // (iostreams aren't the fastest here and not too useful, might as well build it ourselves.)
-    std::string result(std::max(columns , 10), ' ');
+    std::string result(std::max(columns, 15), ' ');
     auto it = result.begin();
 
     std::string_view action_string;
@@ -62,7 +62,7 @@ public:
     it = std::copy(action_string.begin(), action_string.end(), it);
     it++;
 
-    // 1/4 the screen width for the item, at most.
+    // 1/3 the screen width for the item, at most.
     int item_width = columns / 3;
     if (item.size() > item_width) {
       std::string_view ellipses = "...";

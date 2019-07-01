@@ -51,7 +51,8 @@ std::unique_ptr<Task> WorkerPool::ThreadSafeTaskQueue::WaitForTaskAndPop() {
     return {};
   }
 
-  std::unique_ptr<Task> task = std::move(queue.front());
+  // TODO: figure out a better way to do this.
+  std::unique_ptr<Task> task = std::move(const_cast<std::unique_ptr<Task>&>(queue.top()));
   queue.pop();
 
   mutex.Unlock();

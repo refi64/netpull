@@ -92,6 +92,7 @@ public:
   Task(SubmissionKey* key): key_(key) {}
   virtual ~Task() {}
 
+  virtual int priority() const { return 0; }
   virtual void Run()=0;
 
   const SubmissionKey& key() const { return *key_; }
@@ -129,10 +130,17 @@ private:
     void Done();
 
   private:
+  struct TaskIsLowerPriorityComparator {
+    bool operator()(const std::unique_ptr<Task>& a, const std::unique_ptr<Task>& b) {
+      return a->priority() < b->priority();
+    }
+  };
+
     static bool StaticConditionCheck(ThreadSafeTaskQueue* self);
 
     absl::Mutex mutex;
-    std::queue<std::unique_ptr<Task>> queue;
+    std::priority_queue<std::unique_ptr<Task>, std::vector<std::unique_ptr<Task>>,
+                        TaskIsLowerPriorityComparator> queue;
     bool done = false;
   };
 
