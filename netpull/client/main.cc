@@ -390,16 +390,24 @@ void ConsoleUpdateThread(std::unique_ptr<ConsoleLine> status_line,
                          std::atomic<int64_t>* total_bytes_transferred,
                          const std::atomic<int64_t>& total_items_transferred,
                          const std::atomic<int64_t>& total_items) {
+  time_t last_timestamp = 0;
+  double mbps = 0;
+  int transferred_this_second = 0;
+
   while (!notification.WaitForNotificationWithTimeout(absl::Milliseconds(100))) {
-    int transferred_this_cycle = total_bytes_transferred->exchange(0);
-    int transferred_per_second = transferred_this_cycle * 100;
-    double mbps = transferred_per_second / 1024.0 / 1024.0;
+    if (time(nullptr) > last_timestamp) {
+      mbps = transferred_this_second / 1000.0 / 1000.0;
+      transferred_this_second = 0;
+      last_timestamp = time(nullptr);
+    }
 
     std::ostringstream ss;
     ss << "[" << total_items_transferred.load() << "/" << total_items.load() << "] transferred"
-       << " at " << std::setprecision(2) << mbps << " mbps";
+       << " at " << std::setprecision(2) << mbps << " MBps";
     status_line->Update(ss.str());
     ConsoleLine::DrawAll();
+
+    transferred_this_second += total_bytes_transferred->exchange(0);
   }
 
   status_line->Update("Done!");
