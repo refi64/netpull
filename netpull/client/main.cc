@@ -209,13 +209,21 @@ class FileStreamTask : public Task {
 public:
   FileStreamTask(SubmissionKey* key, std::atomic<int64_t>* total_bytes_transferred,
                  std::atomic<int64_t>* total_items_transferred,
-                 proto::PullResponse::PullObject::FileTransferInfo transfer, std::string path,
-                 ScopedFd fd, const IpLocation& server):
+                 proto::PullResponse::PullObject::FileTransferInfo transfer,
+                 const ScopedFd& destfd, std::string path, const IpLocation& server):
     Task(key), total_bytes_transferred(total_bytes_transferred),
     total_items_transferred(total_items_transferred), transfer(transfer),
-    path(std::move(path)), fd(std::move(fd)), server(server) {}
+    destfd(destfd), path(std::move(path)), server(server) {}
 
   void Run() override {
+    ScopedFd fd;
+    if (int rawfd = openat(*destfd, path.data(), O_WRONLY); rawfd != -1) {
+      fd.reset(rawfd);
+    } else {
+      LogErrno("Failed to open %s", path);
+      return;
+    }
+
     std::array<int, 2> pipefd;
     if (pipe(pipefd.data()) == -1) {
       LogErrno("pipe");
@@ -286,8 +294,8 @@ private:
   std::atomic<int64_t>* total_bytes_transferred;
   std::atomic<int64_t>* total_items_transferred;
   proto::PullResponse::PullObject::FileTransferInfo transfer;
+  const ScopedFd& destfd;
   std::string path;
-  ScopedFd fd;
   const IpLocation& server;
 };
 
@@ -378,7 +386,7 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
 
   if (pull.has_transfer()) {
     auto task = new FileStreamTask(key, total_bytes_transferred, total_items_transferred,
-                                   pull.transfer(), std::string(path), std::move(fd), server);
+                                   pull.transfer(), destfd, std::string(path), server);
     pool->Submit(std::unique_ptr<Task>(task));
   } else {
     (*total_items_transferred)++;
