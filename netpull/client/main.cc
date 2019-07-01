@@ -5,7 +5,10 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
+
+#include <sstream>
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
@@ -21,11 +24,110 @@
 
 using namespace netpull;
 
+class ProgressState {
+public:
+  enum class Action {
+    kDownload,
+    kVerify,
+  };
+
+  ProgressState(Action action, std::string_view item): action(action), item(item) {}
+
+  std::string BuildLine(double progress) {
+    struct winsize ws;
+    int columns = 75;
+    if (ioctl(1, TIOCGWINSZ, &ws) == -1) {
+      LogErrno("ioctl(1, TIOCGWINSZ)");
+    } else {
+      columns = ws.ws_col;
+    }
+
+    // Leave an extra space.
+    columns--;
+
+    // (iostreams aren't the fastest here and not too useful, might as well build it ourselves.)
+    std::string result(std::max(columns , 10), ' ');
+    auto it = result.begin();
+
+    std::string_view action_string;
+    switch (action) {
+    case Action::kDownload:
+      action_string = kDownloadActionString;
+      break;
+    case Action::kVerify:
+      action_string = kVerifyActionString;
+      break;
+    }
+
+    it = std::copy(action_string.begin(), action_string.end(), it);
+    it++;
+
+    // 1/4 the screen width for the item, at most.
+    int item_width = columns / 3;
+    if (item.size() > item_width) {
+      std::string_view ellipses = "...";
+      it = std::copy(ellipses.begin(), ellipses.end(), it);
+      it = std::copy(item.end() - (item_width - ellipses.size()), item.end(), it);
+    } else {
+      std::copy(item.begin(), item.end(), it);
+      it += item_width;
+    }
+
+    *it++ = ' ';
+    *it++ = '[';
+
+    // Closing bracket + space + max percent size (XXX.X%).
+    constexpr int kExtraLength = 1 + 1 + 6;
+
+    int remaining_cols = result.end() - it - kExtraLength;
+    int filled_cols = remaining_cols * progress;
+
+    for (int i = 0; i < remaining_cols; i++) {
+      *it++ = i < filled_cols ? '=' : '-';
+    }
+
+    *it++ = ']';
+    *it++ = ' ';
+
+    int progress_factor = 1000;
+    int progress_scaled = progress * progress_factor;
+    for (int i = 0; i < 4; i++) {
+      if (i == 3) {
+        *it++ = '.';
+      }
+
+      int digit = progress_scaled / progress_factor;
+      if (digit == 0 && i < 2) {
+        *it++ = ' ';
+      } else {
+        *it++ = digit + '0';
+      }
+      progress_scaled -= digit * progress_factor;
+      progress_factor /= 10;
+    }
+
+    *it++ = '%';
+
+    return result;
+  }
+
+private:
+  constexpr static const char kDownloadActionString[] = "↓";
+  constexpr static const char kVerifyActionString[] = "✓";
+
+  Action action;
+  std::string_view item;
+};
+
 class FileStreamTask : public Task {
 public:
-  FileStreamTask(SubmissionKey* key, proto::PullResponse::PullObject::FileTransferInfo transfer,
-                 std::string path, ScopedFd fd, const IpLocation& server):
-    Task(key), transfer(transfer), path(std::move(path)), fd(std::move(fd)), server(server) {}
+  FileStreamTask(SubmissionKey* key, std::atomic<int64_t>* total_bytes_transferred,
+                 std::atomic<int64_t>* total_items_transferred,
+                 proto::PullResponse::PullObject::FileTransferInfo transfer, std::string path,
+                 ScopedFd fd, const IpLocation& server):
+    Task(key), total_bytes_transferred(total_bytes_transferred),
+    total_items_transferred(total_items_transferred), transfer(transfer),
+    path(std::move(path)), fd(std::move(fd)), server(server) {}
 
   void Run() override {
     std::array<int, 2> pipefd;
@@ -56,10 +158,12 @@ public:
 
     uint64_t total_bytes = 0;
 
-    line->Update(absl::StrFormat("Starting transfer of %s", path));
+    ProgressState progress(ProgressState::Action::kDownload, path);
+
+    LogVerbose("Starting transfer of %s", path);
 
     while (total_bytes < transfer.bytes()) {
-      line->Update(absl::StrFormat("Splicing for %s, read %d bytes of %d", path, total_bytes, transfer.bytes()));
+      line->Update(progress.BuildLine(static_cast<double>(total_bytes) / transfer.bytes()));
 
       ssize_t expected_bytes = splice(*conn->fd(), nullptr, *write_end, nullptr, kSpliceBuffer,
                                       SPLICE_F_MOVE | SPLICE_F_MORE);
@@ -82,15 +186,19 @@ public:
         }
 
         expected_bytes -= sent_bytes;
+        *total_bytes_transferred += sent_bytes;
       }
     }
 
     fsync(*fd);
+    (*total_items_transferred)++;
 
     // TODO: integrity
   }
 
 private:
+  std::atomic<int64_t>* total_bytes_transferred;
+  std::atomic<int64_t>* total_items_transferred;
   proto::PullResponse::PullObject::FileTransferInfo transfer;
   std::string path;
   ScopedFd fd;
@@ -99,7 +207,8 @@ private:
 
 void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
                     const ScopedFd& destfd, const IpLocation& server, WorkerPool* pool,
-                    SubmissionKey* key) {
+                    SubmissionKey* key, std::atomic<int64_t>* total_bytes_transferred,
+                    std::atomic<int64_t>* total_items_transferred) {
   int open_flags = 0;
   mode_t open_mode = 0;
 
@@ -182,17 +291,28 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   // TODO: times
 
   if (pull.has_transfer()) {
-    auto task = new FileStreamTask(key, pull.transfer(), std::string(path), std::move(fd),
-                                   server);
+    auto task = new FileStreamTask(key, total_bytes_transferred, total_items_transferred,
+                                   pull.transfer(), std::string(path), std::move(fd), server);
     pool->Submit(std::unique_ptr<Task>(task));
+  } else {
+    (*total_items_transferred)++;
   }
 }
 
 void ConsoleUpdateThread(std::unique_ptr<ConsoleLine> status_line,
-                         const absl::Notification& notification) {
-  status_line->Update("Doing stuff...");
-
+                         const absl::Notification& notification,
+                         std::atomic<int64_t>* total_bytes_transferred,
+                         const std::atomic<int64_t>& total_items_transferred,
+                         const std::atomic<int64_t>& total_items) {
   while (!notification.WaitForNotificationWithTimeout(absl::Milliseconds(100))) {
+    int transferred_this_cycle = total_bytes_transferred->exchange(0);
+    int transferred_per_second = transferred_this_cycle * 100;
+    double mbps = transferred_per_second / 1024.0 / 1024.0;
+
+    std::ostringstream ss;
+    ss << "[" << total_items_transferred.load() << "/" << total_items.load() << "] transferred"
+       << " at " << std::setprecision(2) << mbps << " mbps";
+    status_line->Update(ss.str());
     ConsoleLine::DrawAll();
   }
 
@@ -236,9 +356,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  std::atomic<int64_t> total_bytes_transferred(0);
+  std::atomic<int64_t> total_items_transferred(0);
+  std::atomic<int64_t> total_items(0);
+
   absl::Notification console_update_notification;
   std::thread console_update_thread(ConsoleUpdateThread, ConsoleLine::Claim(),
-                                    std::ref(console_update_notification));
+                                    std::ref(console_update_notification),
+                                    &total_bytes_transferred, std::ref(total_items_transferred),
+                                    std::ref(total_items));
 
   SubmissionKey key;
 
@@ -261,14 +387,14 @@ int main(int argc, char** argv) {
 
     if (resp.has_object()) {
       proto::PullResponse::PullObject pull = resp.object();
+      total_items.store(std::max(total_items.load(), pull.number()));
 
-      /* LogInfo("Pull: %s", pull.path()); */
       assert(pull.path()[0] != '/');
-      HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key);
+      HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key,
+                     &total_bytes_transferred, &total_items_transferred);
     } else if (resp.has_started()) {
       LogInfo("Pull started, job ID: %s", resp.started().job());
     } else if (resp.has_finished()) {
-      LogInfo("Shutting down...");
       pool.Done();
       pool.WaitForCompletion();
 

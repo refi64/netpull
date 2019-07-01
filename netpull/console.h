@@ -81,9 +81,8 @@ public:
 
   // XXX: This is kinda ugly but I don't want to give LogGenericString all private access
   // via friend.
-  static void InternalEraseAll();
-  static void InternalDrawAll();
-
+  static void InternalUnsafeEraseOldLines();
+  static void InternalUnsafeDrawAll();
   static void DrawAll();
 
   static size_t count() { return lines.size(); }
@@ -97,6 +96,7 @@ private:
   std::string content;
 
   static std::list<ConsoleLine*> lines;
+  static int diff;
 };
 
 }

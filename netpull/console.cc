@@ -25,7 +25,7 @@ void console_internal::LogGenericString(LogLevel level, std::string str) {
 
   absl::MutexLock lock(&g_mutex);
 
-  ConsoleLine::InternalEraseAll();
+  ConsoleLine::InternalUnsafeEraseOldLines();
 
   switch (level) {
   case LogLevel::kVerbose:
@@ -56,12 +56,13 @@ void console_internal::LogGenericString(LogLevel level, std::string str) {
     break;
   }
 
-  ConsoleLine::InternalDrawAll();
+  ConsoleLine::InternalUnsafeDrawAll();
 }
 
 ConsoleLine::~ConsoleLine() {
   absl::MutexLock lock(&g_mutex);
   lines.erase(it);
+  diff--;
 }
 
 std::unique_ptr<ConsoleLine> ConsoleLine::Claim() {
@@ -69,14 +70,15 @@ std::unique_ptr<ConsoleLine> ConsoleLine::Claim() {
   absl::MutexLock lock(&g_mutex);
   lines.push_back(line);
   line->it = --lines.end();
+  diff++;
   return std::unique_ptr<ConsoleLine>(line);
 }
 
-void ConsoleLine::InternalEraseAll() {
+void ConsoleLine::InternalUnsafeEraseOldLines() {
   std::cout << '\r';
 
-  if (!lines.empty()) {
-    for (int i = 0; i < lines.size() - 1; i++) {
+  if (lines.size() - diff > 0) {
+    for (int i = 0; i < lines.size() - diff - 1; i++) {
       std::cout << ansi::kMoveUp;
     }
   }
@@ -84,7 +86,7 @@ void ConsoleLine::InternalEraseAll() {
   std::cout << ansi::kClearToEos;
 }
 
-void ConsoleLine::InternalDrawAll() {
+void ConsoleLine::InternalUnsafeDrawAll() {
   bool first = true;
 
   for (ConsoleLine* line : lines) {
@@ -98,12 +100,13 @@ void ConsoleLine::InternalDrawAll() {
   }
 
   std::cout << std::flush;
+  diff = 0;
 }
 
 void ConsoleLine::DrawAll() {
   absl::MutexLock lock(&g_mutex);
-  InternalEraseAll();
-  InternalDrawAll();
+  InternalUnsafeEraseOldLines();
+  InternalUnsafeDrawAll();
 }
 
 void ConsoleLine::Update(std::string line) {
@@ -111,5 +114,6 @@ void ConsoleLine::Update(std::string line) {
 }
 
 std::list<ConsoleLine*> ConsoleLine::lines;
+int ConsoleLine::diff = 0;
 
 }  // namespace netpull
