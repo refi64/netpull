@@ -5,6 +5,7 @@
 #pragma once
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/synchronization/mutex.h"
 
 #include <memory>
@@ -13,6 +14,38 @@
 #include <vector>
 
 namespace netpull {
+
+template <typename T>
+class GuardedSet {
+public:
+  GuardedSet() {}
+  GuardedSet(const GuardedSet<T>& other)=delete;
+  GuardedSet(GuardedSet<T>&& other)=default;
+
+  using value_type = T;
+
+  void Add(const T& value) {
+    absl::MutexLock lock(&mutex);
+    data.insert(value);
+  }
+
+  void Add(T&& value) {
+    absl::MutexLock lock(&mutex);
+    data.insert(value);
+  }
+
+  void Remove(const T& value) {
+    data.erase(value);
+  }
+
+  absl::flat_hash_set<T> Pull() {
+    return std::move(data);
+  }
+
+private:
+  absl::Mutex mutex;
+  absl::flat_hash_set<T> data;
+};
 
 template <typename K, typename V>
 class GuardedMap {
@@ -87,19 +120,22 @@ private:
   friend class Task;
 };
 
+class WorkerPool;
+
 class Task {
 public:
   Task(SubmissionKey* key): key_(key) {}
   virtual ~Task() {}
 
   virtual int priority() const { return 0; }
-  virtual void Run()=0;
+  virtual void Run(WorkerPool* pool)=0;
 
   const SubmissionKey& key() const { return *key_; }
+  SubmissionKey* mutable_key() { return key_; }
 
 private:
   void Prepare();
-  void Execute();
+  void Execute(WorkerPool* pool);
 
   SubmissionKey* key_;
 
@@ -144,7 +180,7 @@ private:
     bool done = false;
   };
 
-  static void Worker(ThreadSafeTaskQueue* tasks);
+  static void Worker(WorkerPool* pool);
 
   std::vector<std::thread> threads;
   ThreadSafeTaskQueue tasks;

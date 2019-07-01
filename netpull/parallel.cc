@@ -34,13 +34,13 @@ void Task::Prepare() {
   }
 }
 
-void Task::Execute() {
+void Task::Execute(WorkerPool* pool) {
   ScopedDefer key_resource([&]() {
     if (key_) {
       key_->RemovePending();
     }
   });
-  Run();
+  Run(pool);
 }
 
 std::unique_ptr<Task> WorkerPool::ThreadSafeTaskQueue::WaitForTaskAndPop() {
@@ -76,7 +76,7 @@ bool WorkerPool::ThreadSafeTaskQueue::StaticConditionCheck(ThreadSafeTaskQueue* 
 
 void WorkerPool::Start() {
   for (int i = 0; i < worker_count_; i++) {
-    threads.emplace_back(&WorkerPool::Worker, &tasks);
+    threads.emplace_back(&WorkerPool::Worker, this);
   }
 }
 
@@ -99,14 +99,14 @@ void WorkerPool::WaitForCompletion() {
   threads.clear();
 }
 
-void WorkerPool::Worker(ThreadSafeTaskQueue* tasks) {
+void WorkerPool::Worker(WorkerPool* pool) {
   for (;;) {
-    auto task = tasks->WaitForTaskAndPop();
+    auto task = pool->tasks.WaitForTaskAndPop();
     if (!task) {
       return;
     }
 
-    task->Execute();
+    task->Execute(pool);
   }
 }
 

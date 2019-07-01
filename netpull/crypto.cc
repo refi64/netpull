@@ -7,7 +7,6 @@
 
 #include "absl/strings/str_cat.h"
 #include "openssl/rand.h"
-#include "openssl/sha.h"
 
 #include "netpull/console.h"
 
@@ -27,45 +26,29 @@ static std::string Hexlify(const std::array<std::byte, N>& bytes) {
   return result;
 }
 
-std::string RandomId() {
+std::string SecureRandomId() {
   constexpr int kLength = 8;
   std::array<std::byte, kLength> bytes;
   RAND_bytes(reinterpret_cast<std::uint8_t*>(bytes.data()), kLength);
   return Hexlify(bytes);
 }
 
-std::optional<std::string> Sha256ForPath(std::string_view path) {
-  SHA256_CTX ctx;
-  SHA256_Init(&ctx);
+Sha256Builder::Sha256Builder() {
+ SHA256_Init(&ctx);
+}
 
-  std::ifstream is(path.data());
-  if (!is) {
-    LogErrno("Failed to open %s", path);
-    return {};
-  }
+void Sha256Builder::Update(const void* bytes, size_t size) {
+  SHA256_Update(&ctx, bytes, size);
+}
 
-  constexpr int kBufferSize = 64 * 1024;
-  std::array<char, kBufferSize> buffer;
-
-  while (is) {
-    is.read(buffer.data(), buffer.size());
-    if (is.gcount()) {
-      SHA256_Update(&ctx, reinterpret_cast<const void*>(buffer.data()), is.gcount());
-    }
-  }
-
-  if (!is.eof()) {
-    LogErrno("Failed to read from %s", path);
-    return {};
-  }
-
+std::optional<std::string> Sha256Builder::Finish() {
   std::array<std::byte, SHA256_DIGEST_LENGTH> digest;
   if (!SHA256_Final(reinterpret_cast<uint8_t*>(digest.data()), &ctx)) {
-    LogError("sha256 digest generation for %s failed", path);
+    LogError("sha256 digest generation failed");
     return {};
   }
 
   return Hexlify(digest);
 }
 
-}
+}  // namespace netpull

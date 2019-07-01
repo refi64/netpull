@@ -18,6 +18,7 @@
 #include "absl/time/time.h"
 
 #include "netpull/console.h"
+#include "netpull/crypto.h"
 #include "netpull/network.h"
 #include "netpull/parallel.h"
 #include "netpull/scoped_resource.h"
@@ -205,17 +206,78 @@ private:
   const Utf8WidthInformation item_utf8;
 };
 
+class FileIntegrityTask : public Task {
+public:
+  FileIntegrityTask(SubmissionKey* key, GuardedSet<std::string>* to_complete,
+                    const std::string& expected_digest, const ScopedFd& destfd,
+                    std::string path):
+    Task(key), to_complete(to_complete), expected_digest(expected_digest), destfd(destfd),
+    path(path) {}
+
+  void Run(WorkerPool* pool) override {
+    ScopedFd fd;
+    if (int rawfd = openat(*destfd, path.data(), O_RDONLY); rawfd != -1) {
+      fd.reset(rawfd);
+    } else {
+      LogErrno("Failed to open %s", path);
+      return;
+    }
+
+    LogVerbose("Checking integrity of %s", path);
+
+    std::array<std::byte, Sha256Builder::kRecommendedBufferSize> buffer;
+    Sha256Builder builder;
+
+    auto line = ConsoleLine::Claim();
+    ProgressState progress(ProgressState::Action::kVerify, path);
+
+    size_t total_bytes_processed = 0;
+    size_t total_bytes = lseek(*fd, 0, SEEK_END);
+    lseek(*fd, 0, SEEK_SET);
+
+    for (;;) {
+      line->Update(progress.BuildLine(static_cast<double>(total_bytes_processed) / total_bytes));
+
+      ssize_t bytes_read = read(*fd, static_cast<void*>(buffer.data()), buffer.size());
+      if (bytes_read == -1) {
+        LogErrno("Failed to read from %s", path);
+        return;
+      } else if (bytes_read == 0) {
+        break;
+      }
+
+      builder.Update(buffer, static_cast<size_t>(bytes_read));
+      total_bytes_processed += bytes_read;
+    }
+
+    if (auto digest = builder.Finish()) {
+      if (*digest != expected_digest) {
+        LogError("Wrong digest %s", *digest);
+      } else {
+        to_complete->Remove(path);
+      }
+    }
+  }
+
+private:
+  GuardedSet<std::string>* to_complete;
+  std::string expected_digest;
+  const ScopedFd& destfd;
+  std::string path;
+};
+
 class FileStreamTask : public Task {
 public:
-  FileStreamTask(SubmissionKey* key, std::atomic<int64_t>* total_bytes_transferred,
+  FileStreamTask(SubmissionKey* key, GuardedSet<std::string>* to_complete,
+                 std::atomic<int64_t>* total_bytes_transferred,
                  std::atomic<int64_t>* total_items_transferred,
                  proto::PullResponse::PullObject::FileTransferInfo transfer,
                  const ScopedFd& destfd, std::string path, const IpLocation& server):
-    Task(key), total_bytes_transferred(total_bytes_transferred),
+    Task(key), to_complete(to_complete), total_bytes_transferred(total_bytes_transferred),
     total_items_transferred(total_items_transferred), transfer(transfer),
     destfd(destfd), path(std::move(path)), server(server) {}
 
-  void Run() override {
+  void Run(WorkerPool* pool) override {
     ScopedFd fd;
     if (int rawfd = openat(*destfd, path.data(), O_WRONLY); rawfd != -1) {
       fd.reset(rawfd);
@@ -246,12 +308,11 @@ public:
       return;
     }
 
-    auto line = ConsoleLine::Claim();
-
     constexpr size_t kSpliceBuffer = 16 * 1024;
 
     uint64_t total_bytes = 0;
 
+    auto line = ConsoleLine::Claim();
     ProgressState progress(ProgressState::Action::kDownload, path);
 
     LogVerbose("Starting transfer of %s", path);
@@ -287,10 +348,13 @@ public:
     fsync(*fd);
     (*total_items_transferred)++;
 
-    // TODO: integrity
+    auto task = new FileIntegrityTask(mutable_key(), to_complete, transfer.sha256(),
+                                      destfd, path);
+    pool->Submit(std::unique_ptr<Task>(task));
   }
 
 private:
+  GuardedSet<std::string>* to_complete;
   std::atomic<int64_t>* total_bytes_transferred;
   std::atomic<int64_t>* total_items_transferred;
   proto::PullResponse::PullObject::FileTransferInfo transfer;
@@ -301,7 +365,8 @@ private:
 
 void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
                     const ScopedFd& destfd, const IpLocation& server, WorkerPool* pool,
-                    SubmissionKey* key, std::atomic<int64_t>* total_bytes_transferred,
+                    SubmissionKey* key, GuardedSet<std::string>* to_complete,
+                    std::atomic<int64_t>* total_bytes_transferred,
                     std::atomic<int64_t>* total_items_transferred) {
   int open_flags = 0;
   mode_t open_mode = 0;
@@ -385,8 +450,10 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   // TODO: times
 
   if (pull.has_transfer()) {
-    auto task = new FileStreamTask(key, total_bytes_transferred, total_items_transferred,
-                                   pull.transfer(), destfd, std::string(path), server);
+    to_complete->Add(std::string(path));
+    auto task = new FileStreamTask(key, to_complete, total_bytes_transferred,
+                                   total_items_transferred, pull.transfer(), destfd,
+                                   std::string(path), server);
     pool->Submit(std::unique_ptr<Task>(task));
   } else {
     (*total_items_transferred)++;
@@ -469,6 +536,7 @@ int main(int argc, char** argv) {
                                     std::ref(total_items));
 
   SubmissionKey key;
+  GuardedSet<std::string> to_complete;
 
   WorkerPool pool(absl::GetFlag(FLAGS_workers));
   pool.Start();
@@ -492,11 +560,12 @@ int main(int argc, char** argv) {
       total_items.store(std::max(total_items.load(), pull.number()));
 
       assert(pull.path()[0] != '/');
-      HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key,
+      HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key, &to_complete,
                      &total_bytes_transferred, &total_items_transferred);
     } else if (resp.has_started()) {
       LogInfo("Pull started, job ID: %s", resp.started().job());
     } else if (resp.has_finished()) {
+      key.WaitForPending();
       pool.Done();
       pool.WaitForCompletion();
 

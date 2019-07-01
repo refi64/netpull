@@ -21,6 +21,9 @@
 #include "absl/flags/parse.h"
 #include "absl/strings/match.h"
 
+#include "openssl/rand.h"
+#include "openssl/sha.h"
+
 #include "netpull/console.h"
 #include "netpull/crypto.h"
 #include "netpull/network.h"
@@ -32,6 +35,25 @@
 #include "netpull/server/filesystem.h"
 
 using namespace netpull;
+
+template <size_t N>
+std::string Hexlify(const std::array<std::byte, N>& bytes) {
+  std::string result;
+  result.reserve(bytes.size() * 2);
+
+  for (auto byte : bytes) {
+    result += absl::StrCat(absl::Hex(byte, absl::kZeroPad2));
+  }
+
+  return result;
+}
+
+std::string RandomId() {
+  constexpr int kLength = 8;
+  std::array<std::byte, kLength> bytes;
+  RAND_bytes(reinterpret_cast<std::uint8_t*>(bytes.data()), kLength);
+  return Hexlify(bytes);
+}
 
 enum class TaskPriority {
   kFileIntegrity = 0,
@@ -49,13 +71,39 @@ public:
     return static_cast<int>(TaskPriority::kFileIntegrity);
   }
 
-  void Run() override {
+  void Run(WorkerPool* pool) override {
     if (!conn->alive()) {
       return;
     }
 
-    if (auto sha256 = Sha256ForPath(path.path()); sha256 && conn->alive()) {
-      resp.mutable_object()->mutable_transfer()->set_sha256(*sha256);
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+
+    std::ifstream is(path.path());
+    if (!is) {
+      LogErrno("Failed to open %s", absl::FormatStreamed(path));
+      return;
+    }
+
+    std::array<std::byte, Sha256Builder::kRecommendedBufferSize> buffer;
+    Sha256Builder builder;
+
+    while (is && conn->alive()) {
+      is.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+      if (is.gcount()) {
+        builder.Update(buffer, is.gcount());
+      }
+    }
+
+    if (!conn->alive()) {
+      return;
+    } else if (!is.eof()) {
+      LogErrno("Failed to read from %s", absl::FormatStreamed(path));
+      return;
+    }
+
+    if (auto digest = builder.Finish()) {
+      resp.mutable_object()->mutable_transfer()->set_sha256(*digest);
 
       absl::MutexLock lock(conn_mutex);
       conn->SendProtobufMessage(resp);
@@ -78,7 +126,7 @@ public:
     return static_cast<int>(TaskPriority::kFileStream);
   }
 
-  void Run() override {
+  void Run(WorkerPool* pool) override {
     ScopedFd fd;
     if (int rawfd = openat(AT_FDCWD, path.path().data(), O_RDONLY); rawfd != -1) {
       fd.reset(rawfd);
@@ -188,7 +236,7 @@ protected:
 
       transfer->set_bytes(st.st_size);
 
-      auto id = RandomId();
+      auto id = SecureRandomId();
       transfer->set_id(id);
       ready_files->Put(id, {conn->peer(), object.path(), static_cast<uint64_t>(st.st_size)});
 
