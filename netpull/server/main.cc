@@ -140,6 +140,9 @@ public:
         LogError("sendfile of %s returned 0 while %d bytes remained",
                  absl::FormatStreamed(path), bytes);
         break;
+      } else if (bytes_read == -1) {
+        LogErrno("sendfile of %s", absl::FormatStreamed(path));
+        return;
       }
 
       bytes_remaining -= bytes_read;
