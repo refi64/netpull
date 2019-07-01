@@ -18,6 +18,8 @@ cc_library(
   srcs = [
     'netpull/console.h',
     'netpull/console.cc',
+    'netpull/crypto.h',
+    'netpull/crypto.cc',
     'netpull/network.h',
     'netpull/network.cc',
     'netpull/parallel.h',
@@ -25,6 +27,7 @@ cc_library(
     'netpull/scoped_resource.h',
   ],
   deps = [
+    '@boringssl//:crypto',
     '@com_google_absl//absl/container:flat_hash_map',
     '@com_google_absl//absl/strings:str_format',
     '@com_google_absl//absl/synchronization',
@@ -42,7 +45,6 @@ cc_binary(
   deps = [
     ':netpull_common',
     ':netpull_cc_proto',
-    '@boringssl//:crypto',
     '@com_google_absl//absl/flags:flag',
     '@com_google_absl//absl/flags:parse',
     '@com_google_absl//absl/strings',

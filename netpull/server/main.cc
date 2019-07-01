@@ -21,10 +21,8 @@
 #include "absl/flags/parse.h"
 #include "absl/strings/match.h"
 
-#include "openssl/rand.h"
-#include "openssl/sha.h"
-
 #include "netpull/console.h"
+#include "netpull/crypto.h"
 #include "netpull/network.h"
 #include "netpull/parallel.h"
 #include "netpull/scoped_resource.h"
@@ -34,25 +32,6 @@
 #include "netpull/server/filesystem.h"
 
 using namespace netpull;
-
-template <size_t N>
-std::string Hexlify(const std::array<std::byte, N>& bytes) {
-  std::string result;
-  result.reserve(bytes.size() * 2);
-
-  for (auto byte : bytes) {
-    result += absl::StrCat(absl::Hex(byte, absl::kZeroPad2));
-  }
-
-  return result;
-}
-
-std::string RandomId() {
-  constexpr int kLength = 8;
-  std::array<std::byte, kLength> bytes;
-  RAND_bytes(reinterpret_cast<std::uint8_t*>(bytes.data()), kLength);
-  return Hexlify(bytes);
-}
 
 enum class TaskPriority {
   kFileIntegrity = 0,
@@ -75,45 +54,9 @@ public:
       return;
     }
 
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
+    if (auto sha256 = Sha256ForPath(path.path()); sha256 && conn->alive()) {
+      resp.mutable_object()->mutable_transfer()->set_sha256(*sha256);
 
-    std::ifstream is(path.path());
-    if (!is) {
-      LogErrno("Failed to open %s", absl::FormatStreamed(path));
-      return;
-    }
-
-    constexpr int kBufferSize = 64 * 1024;
-    std::array<char, kBufferSize> buffer;
-
-    while (is) {
-      is.read(buffer.data(), buffer.size());
-      if (is.gcount()) {
-        SHA256_Update(&ctx, reinterpret_cast<const void*>(buffer.data()), is.gcount());
-      }
-    }
-
-    if (!is.eof()) {
-      LogErrno("Failed to read from %s", absl::FormatStreamed(path));
-      return;
-    }
-
-    std::array<std::byte, SHA256_DIGEST_LENGTH> digest;
-    if (!SHA256_Final(reinterpret_cast<uint8_t*>(digest.data()), &ctx)) {
-      LogError("sha256 digest generation for %s failed", absl::FormatStreamed(path));
-      return;
-    }
-
-    std::string hexdigest;
-    hexdigest.reserve(SHA256_DIGEST_LENGTH * 2);
-    for (auto byte : digest) {
-      hexdigest += absl::StrCat(absl::Hex(byte, absl::kZeroPad2));
-    }
-
-    resp.mutable_object()->mutable_transfer()->set_sha256(Hexlify(digest));
-
-    if (conn->alive()) {
       absl::MutexLock lock(conn_mutex);
       conn->SendProtobufMessage(resp);
     }
