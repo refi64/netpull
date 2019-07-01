@@ -244,7 +244,7 @@ std::optional<SocketServer> SocketServer::Bind(IpLocation location) {
 
 std::optional<SocketConnection> SocketServer::Accept() {
   struct sockaddr_in sockaddr;
-  socklen_t sockaddr_len;
+  socklen_t sockaddr_len = sizeof(sockaddr);
 
   if (int rawfd = accept(*fd_, reinterpret_cast<struct sockaddr*>(&sockaddr), &sockaddr_len);
       rawfd != -1) {
