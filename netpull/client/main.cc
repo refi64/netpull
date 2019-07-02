@@ -165,7 +165,7 @@ public:
       it = std::copy(item.begin() + index, item.end(), it);
     } else {
       it = std::copy(item.begin(), item.end(), it);
-      it += item_space - item_utf8.total_width;
+      it += item_space - item_utf8.total_width - 1;
     }
 
     it++;
