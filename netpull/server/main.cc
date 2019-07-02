@@ -175,6 +175,11 @@ struct ReadyFile {
 
 using ReadyFilesMap = GuardedMap<std::string, ReadyFile>;
 
+void CopyTimespecToProtoTimestamp(google::protobuf::Timestamp* out, const struct timespec& ts) {
+  out->set_seconds(ts.tv_sec);
+  out->set_nanos(ts.tv_nsec);
+}
+
 class ClientSendCrawler : public FastCrawler {
 public:
   ClientSendCrawler(SubmissionKey* key, WorkerPool* pool, ReadyFilesMap* ready_files,
@@ -221,6 +226,10 @@ protected:
     if (struct group *gr = getgrgid(st.st_gid)) {
       owner->set_group(gr->gr_name);
     }
+
+    proto::PullResponse::PullObject::Times* times = pull->mutable_times();
+    CopyTimespecToProtoTimestamp(times->mutable_access(), st.st_atim);
+    CopyTimespecToProtoTimestamp(times->mutable_modify(), st.st_mtim);
 
     if (object.type() == FsObject::Type::kSymlink) {
       proto::PullResponse::PullObject::SymlinkData* symlink = pull->mutable_symlink();

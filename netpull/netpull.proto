@@ -49,7 +49,6 @@ message PullResponse {
     message Times {
       google.protobuf.Timestamp access = 1;
       google.protobuf.Timestamp modify = 2;
-      google.protobuf.Timestamp birth = 3;
     }
 
     message FileTransferInfo {

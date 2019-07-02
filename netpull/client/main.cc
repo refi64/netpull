@@ -84,15 +84,35 @@ private:
   std::string path;
 };
 
+void CopyProtoTimestampToTimespec(struct timespec* out, const google::protobuf::Timestamp& ts) {
+  out->tv_sec = ts.seconds();
+  out->tv_nsec = ts.nanos();
+}
+
+bool SetTimestamps(const ScopedFd& destfd, std::string_view path,
+                   const proto::PullResponse::PullObject::Times& proto_times) {
+  std::array<struct timespec, 2> times;
+  CopyProtoTimestampToTimespec(&times[0], proto_times.access());
+  CopyProtoTimestampToTimespec(&times[1], proto_times.modify());
+
+  if (utimensat(*destfd, path.data(), times.data(), AT_SYMLINK_NOFOLLOW) == -1) {
+    LogError("Failed to set timestamps of %s", path);
+    return false;
+  }
+
+  return true;
+}
+
 class FileStreamTask : public Task {
 public:
   FileStreamTask(SubmissionKey* key, GuardedSet<std::string>* to_complete,
                  std::atomic<int64_t>* total_bytes_transferred,
                  std::atomic<int64_t>* total_items_transferred,
                  proto::PullResponse::PullObject::FileTransferInfo transfer,
+                 proto::PullResponse::PullObject::Times times,
                  const ScopedFd& destfd, std::string path, const IpLocation& server):
     Task(key), to_complete(to_complete), total_bytes_transferred(total_bytes_transferred),
-    total_items_transferred(total_items_transferred), transfer(transfer),
+    total_items_transferred(total_items_transferred), transfer(transfer), times(times),
     destfd(destfd), path(std::move(path)), server(server) {}
 
   void Run(WorkerPool* pool) override {
@@ -167,6 +187,10 @@ public:
     fsync(*fd);
     (*total_items_transferred)++;
 
+    if (!SetTimestamps(destfd, path, times)) {
+      return;
+    }
+
     auto task = new FileIntegrityTask(mutable_key(), to_complete, transfer.sha256(),
                                       destfd, path);
     pool->Submit(std::unique_ptr<Task>(task));
@@ -177,6 +201,7 @@ private:
   std::atomic<int64_t>* total_bytes_transferred;
   std::atomic<int64_t>* total_items_transferred;
   proto::PullResponse::PullObject::FileTransferInfo transfer;
+  proto::PullResponse::PullObject::Times times;
   const ScopedFd& destfd;
   std::string path;
   const IpLocation& server;
@@ -190,7 +215,8 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   int open_flags = 0;
   mode_t open_mode = 0;
 
-  std::string_view path(pull.path());
+  std::string path(pull.path());
+  to_complete->Add(path);
 
   switch (pull.type()) {
   case proto::PullResponse::PullObject::kTypeFile:
@@ -269,13 +295,17 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   // TODO: times
 
   if (pull.has_transfer()) {
-    to_complete->Add(std::string(path));
     auto task = new FileStreamTask(key, to_complete, total_bytes_transferred,
-                                   total_items_transferred, pull.transfer(), destfd,
-                                   std::string(path), server);
+                                   total_items_transferred, pull.transfer(), pull.times(),
+                                   destfd, std::string(path), server);
     pool->Submit(std::unique_ptr<Task>(task));
   } else {
     (*total_items_transferred)++;
+    if (!SetTimestamps(destfd, path, pull.times())) {
+      return;
+    }
+
+    to_complete->Remove(path);
   }
 }
 
