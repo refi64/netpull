@@ -134,6 +134,10 @@ public:
       return;
     }
 
+    if (posix_fadvise(*fd, 0, bytes, POSIX_FADV_SEQUENTIAL | POSIX_FADV_WILLNEED) == -1) {
+      LogErrno("posix_fadvise(POSIX_FADV_SEQUENTIAL | POSIX_FADV_WILLNEED)");
+    }
+
     constexpr uint64_t kMaxSendfileBuffer = std::numeric_limits<ssize_t>::max();
     uint64_t bytes_remaining = bytes;
 
@@ -150,6 +154,10 @@ public:
       }
 
       bytes_remaining -= bytes_read;
+    }
+
+    if (posix_fadvise(*fd, 0, bytes, POSIX_FADV_DONTNEED) == -1) {
+      LogErrno("posix_fadvise(POSIX_FADV_DONTNEED)");
     }
   }
 
