@@ -20,20 +20,42 @@ cc_library(
     'netpull/console.cc',
     'netpull/crypto.h',
     'netpull/crypto.cc',
-    'netpull/network.h',
-    'netpull/network.cc',
-    'netpull/parallel.h',
-    'netpull/parallel.cc',
     'netpull/scoped_resource.h',
   ],
   deps = [
     '@boringssl//:crypto',
-    '@com_google_absl//absl/container:flat_hash_map',
-    '@com_google_absl//absl/container:flat_hash_set',
     '@com_google_absl//absl/strings:str_format',
     '@com_google_absl//absl/synchronization',
+  ],
+)
+
+cc_library(
+  name = 'netpull_network',
+  srcs = [
+    'netpull/network/ip.h',
+    'netpull/network/ip.cc',
+    'netpull/network/socket.h',
+    'netpull/network/socket.cc',
+  ],
+  deps = [
+    ':netpull_common',
     '@com_google_protobuf//:protobuf',
-    '@wcwidth//:wcwidth',
+  ],
+)
+
+cc_library(
+  name = 'netpull_parallel',
+  srcs = [
+    'netpull/parallel/guarded_map.h',
+    'netpull/parallel/guarded_set.h',
+    'netpull/parallel/worker_pool.h',
+    'netpull/parallel/worker_pool.cc',
+  ],
+  deps = [
+    ':netpull_common',
+    '@com_google_absl//absl/container:flat_hash_map',
+    '@com_google_absl//absl/container:flat_hash_set',
+    '@com_google_absl//absl/synchronization',
   ],
 )
 
@@ -49,6 +71,8 @@ cc_binary(
   deps = [
     ':netpull_common',
     ':netpull_cc_proto',
+    ':netpull_network',
+    ':netpull_parallel',
     '@com_google_absl//absl/flags:flag',
     '@com_google_absl//absl/flags:parse',
     '@com_google_absl//absl/strings',
@@ -67,9 +91,12 @@ cc_binary(
   deps = [
     ':netpull_common',
     ':netpull_cc_proto',
+    ':netpull_network',
+    ':netpull_parallel',
     '@com_google_absl//absl/flags:flag',
     '@com_google_absl//absl/flags:parse',
     '@com_google_absl//absl/synchronization',
     '@com_google_absl//absl/time',
+    '@wcwidth//:wcwidth',
   ],
 )

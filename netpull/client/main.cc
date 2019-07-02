@@ -15,8 +15,10 @@
 #include "netpull/console.h"
 #include "netpull/crypto.h"
 #include "netpull/netpull.pb.h"
-#include "netpull/network.h"
-#include "netpull/parallel.h"
+#include "netpull/network/ip.h"
+#include "netpull/network/socket.h"
+#include "netpull/parallel/guarded_set.h"
+#include "netpull/parallel/worker_pool.h"
 #include "netpull/scoped_resource.h"
 
 #include "netpull/client/progress_builder.h"
@@ -72,7 +74,7 @@ public:
       if (*digest != expected_digest) {
         LogError("Wrong digest %s", *digest);
       } else {
-        to_complete->Remove(path);
+        to_complete->Erase(path);
       }
     }
   }
@@ -216,7 +218,7 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   mode_t open_mode = 0;
 
   std::string path(pull.path());
-  to_complete->Add(path);
+  to_complete->Insert(path);
 
   switch (pull.type()) {
   case proto::PullResponse::PullObject::kTypeFile:
@@ -305,7 +307,7 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
       return;
     }
 
-    to_complete->Remove(path);
+    to_complete->Erase(path);
   }
 }
 

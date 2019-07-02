@@ -5,7 +5,7 @@
 #include "netpull/console.h"
 #include "netpull/scoped_resource.h"
 
-#include "parallel.h"
+#include "worker_pool.h"
 
 namespace netpull {
 
@@ -110,4 +110,4 @@ void WorkerPool::Worker(WorkerPool* pool) {
   }
 }
 
-}
+}  // namespace netpull

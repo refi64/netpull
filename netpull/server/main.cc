@@ -21,13 +21,12 @@
 #include "absl/flags/parse.h"
 #include "absl/strings/match.h"
 
-#include "openssl/rand.h"
-#include "openssl/sha.h"
-
 #include "netpull/console.h"
 #include "netpull/crypto.h"
-#include "netpull/network.h"
-#include "netpull/parallel.h"
+#include "netpull/network/ip.h"
+#include "netpull/network/socket.h"
+#include "netpull/parallel/guarded_map.h"
+#include "netpull/parallel/worker_pool.h"
 #include "netpull/scoped_resource.h"
 
 #include "netpull/netpull.pb.h"
@@ -36,25 +35,6 @@
 #include "netpull/server/path.h"
 
 using namespace netpull;
-
-template <size_t N>
-std::string Hexlify(const std::array<std::byte, N>& bytes) {
-  std::string result;
-  result.reserve(bytes.size() * 2);
-
-  for (auto byte : bytes) {
-    result += absl::StrCat(absl::Hex(byte, absl::kZeroPad2));
-  }
-
-  return result;
-}
-
-std::string RandomId() {
-  constexpr int kLength = 8;
-  std::array<std::byte, kLength> bytes;
-  RAND_bytes(reinterpret_cast<std::uint8_t*>(bytes.data()), kLength);
-  return Hexlify(bytes);
-}
 
 enum class TaskPriority {
   kFileIntegrity = 0,
