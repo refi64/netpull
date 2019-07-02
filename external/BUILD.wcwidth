@@ -1,0 +1,8 @@
+cc_library(
+  name = 'wcwidth',
+  srcs = [
+    'wcwidth.c',
+    'wcwidth.h',
+  ],
+  visibility = ['//visibility:public'],
+)
