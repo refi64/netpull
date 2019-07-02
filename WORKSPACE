@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-load('@bazel_tools//tools/build_defs/repo:git.bzl', 'git_repository')
+load('@bazel_tools//tools/build_defs/repo:git.bzl', 'git_repository', 'new_git_repository')
 
 git_repository(
   name = 'bazel_skylib',
@@ -42,6 +42,14 @@ git_repository(
   # branch = 'master',
   commit = 'd65e19dfcd8697076f68598c0131c6930cdcd74d',
   shallow_since = '1561428275 -0400',
+)
+
+new_git_repository(
+  name = 'wcwidth',
+  remote = 'https://github.com/termux/wcwidth',
+  commit = '096b8e6473c468be71d1241a58c025cad29a8043',
+  shallow_since = '1477268057 +0200',
+  build_file = 'BUILD.wcwidth',
 )
 
 load('@com_google_protobuf//:protobuf_deps.bzl', 'protobuf_deps')

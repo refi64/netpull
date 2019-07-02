@@ -25,6 +25,8 @@
 
 #include "netpull/netpull.pb.h"
 
+#include "wcwidth.h"
+
 using namespace netpull;
 
 struct Utf8WidthInformation {
@@ -32,10 +34,14 @@ struct Utf8WidthInformation {
   std::vector<int> char_widths;
   size_t total_width = 0;
 
-  static Utf8WidthInformation ForString(std::string_view str) {
+  static Utf8WidthInformation ForString(std::string_view signed_str) {
     static_assert(sizeof(wchar_t) == 4);
 
     Utf8WidthInformation info;
+
+    // We're going to do bit manipulations, so convert it to unsigned.
+    std::basic_string_view<unsigned char> str(
+      reinterpret_cast<const unsigned char*>(signed_str.data()), signed_str.size());
 
     constexpr int
       kOneByteMask = 0x80,
@@ -50,8 +56,8 @@ struct Utf8WidthInformation {
 
     wchar_t current_char = 0;
     for (auto it = str.begin(); it != str.end(); ) {
-      char c = *it;
-      info.char_indexes.push_back(it - str.begin());
+      unsigned char c = *it;
+      size_t pos = it - str.begin();
 
       if ((c & kOneByteMask) == kOneByteValue) {
         current_char = *it++;
@@ -82,6 +88,12 @@ struct Utf8WidthInformation {
       }
 
       int width = wcwidth(current_char);
+      if (width == -1) {
+        LogWarning("wcwidth of %s (%d) returned -1 [%d:%d)",
+                   std::string_view(signed_str.data() + pos, it - str.begin() - pos),
+                   (current_char), pos, it - str.begin());
+      }
+      info.char_indexes.push_back(pos);
       info.char_widths.push_back(width);
       info.total_width += width;
     }
@@ -133,23 +145,23 @@ public:
     // 1/3 the screen width for the item, at most.
     int item_space = columns / 3;
     if (item_utf8.total_width > item_space) {
-      std::string_view ellipses = "...";
-      it = std::copy(ellipses.begin(), ellipses.end(), it);
+      constexpr std::string_view kEllipses = "...";
+      it = std::copy(kEllipses.begin(), kEllipses.end(), it);
 
       // Figure out how many UTF-8 chars to print.
       int current_width = 0;
       auto width_it = item_utf8.char_widths.rbegin();
       for (; width_it != item_utf8.char_widths.rend(); width_it++) {
-        if (current_width + *width_it > item_space - ellipses.size()) {
+        if (current_width + *width_it > item_space - kEllipses.size()) {
+          width_it--;
           break;
         }
 
         current_width += *width_it;
       }
 
-      // Find the byte character index.
+      // Find the byte character index and copy it over.
       size_t index = item_utf8.char_indexes[item_utf8.char_widths.rend() - width_it];
-
       it = std::copy(item.begin() + index, item.end(), it);
     } else {
       it = std::copy(item.begin(), item.end(), it);
