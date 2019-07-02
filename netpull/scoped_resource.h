@@ -17,7 +17,7 @@ class ScopedResource {
 public:
   ScopedResource() {}
 
-  ScopedResource(Type value): value_{std::move(value)} {}
+  explicit ScopedResource(Type value): value_{std::move(value)} {}
 
   ScopedResource(const ScopedResource<Type, Deleter>& other)=delete;
 

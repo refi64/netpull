@@ -12,7 +12,7 @@
 
 #include "netpull/console.h"
 
-#include "filesystem.h"
+#include "fast_crawler.h"
 
 using namespace std::literals::string_view_literals;
 
@@ -29,14 +29,6 @@ static int getdents64(int rawfd, struct linux_dirent64* dp, int size) {
 }
 
 namespace netpull {
-
-std::ostream& operator<<(std::ostream& os, PathView path) {
-  return os << path.path();
-}
-
-std::ostream& operator<<(std::ostream& os, Path path) {
-  return os << path.path();
-}
 
 static std::optional<std::string> FindUnresolvedLinkTargetAt(int rawparentfd,
                                                              std::string_view child) {
@@ -181,7 +173,7 @@ void FastCrawler::PumpDirectoryEntries(PathView root, int rawparentfd, PathView 
 
       if (dp->d_type == DT_DIR) {
         if (int rawnewfd = dup(*fd); rawnewfd != -1) {
-          queue.emplace(rawnewfd, full_path, dp->d_name);
+          queue.emplace(ScopedFd(rawnewfd), full_path, dp->d_name);
         } else {
           LogErrno("Failed to dup parent fd");
         }
@@ -190,4 +182,4 @@ void FastCrawler::PumpDirectoryEntries(PathView root, int rawparentfd, PathView 
   }
 }
 
-}
+}  // namespace netpull

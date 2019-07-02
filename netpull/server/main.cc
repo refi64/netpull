@@ -32,7 +32,8 @@
 
 #include "netpull/netpull.pb.h"
 
-#include "netpull/server/filesystem.h"
+#include "netpull/server/fast_crawler.h"
+#include "netpull/server/path.h"
 
 using namespace netpull;
 

@@ -40,9 +40,11 @@ cc_library(
 cc_binary(
   name = 'netpull_server',
   srcs = [
-    'netpull/server/filesystem.h',
-    'netpull/server/filesystem.cc',
+    'netpull/server/fast_crawler.h',
+    'netpull/server/fast_crawler.cc',
     'netpull/server/main.cc',
+    'netpull/server/path.h',
+    'netpull/server/path.cc',
   ],
   deps = [
     ':netpull_common',
