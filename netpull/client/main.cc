@@ -5,12 +5,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <wchar.h>
-
-#include <algorithm>
-#include <sstream>
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
@@ -19,204 +14,14 @@
 
 #include "netpull/console.h"
 #include "netpull/crypto.h"
+#include "netpull/netpull.pb.h"
 #include "netpull/network.h"
 #include "netpull/parallel.h"
 #include "netpull/scoped_resource.h"
 
-#include "netpull/netpull.pb.h"
-
-#include "wcwidth.h"
+#include "netpull/client/progress_builder.h"
 
 using namespace netpull;
-
-struct Utf8WidthInformation {
-  std::vector<size_t> char_indexes;
-  std::vector<int> char_widths;
-  size_t total_width = 0;
-
-  static Utf8WidthInformation ForString(std::string_view signed_str) {
-    static_assert(sizeof(wchar_t) == 4);
-
-    Utf8WidthInformation info;
-
-    // We're going to do bit manipulations, so convert it to unsigned.
-    std::basic_string_view<unsigned char> str(
-      reinterpret_cast<const unsigned char*>(signed_str.data()), signed_str.size());
-
-    constexpr int
-      kOneByteMask = 0x80,
-      kOneByteValue = 0,
-      kTwoByteMask = 0xE0,
-      kTwoByteValue = 0xC0,
-      kThreeByteMask = 0xF0,
-      kThreeByteValue = kTwoByteMask,
-      kFourByteMask = 0xF8,
-      kFourByteValue = kThreeByteMask,
-      kSequenceMask = 0x3F;
-
-    wchar_t current_char = 0;
-    for (auto it = str.begin(); it != str.end(); ) {
-      unsigned char c = *it;
-      size_t pos = it - str.begin();
-
-      if ((c & kOneByteMask) == kOneByteValue) {
-        current_char = *it++;
-      } else if ((c & kTwoByteMask) == kTwoByteValue) {
-        if (str.end() - it < 2) {
-          continue;
-        }
-
-        current_char = (*it++ & ~kTwoByteMask) << 6;
-        current_char |= *it++ & kSequenceMask;
-      } else if ((c & kThreeByteMask) == kThreeByteValue) {
-        if (str.end() - it < 3) {
-          continue;
-        }
-
-        current_char = (*it++ & ~kThreeByteMask) << 12;
-        current_char |= (*it++ & kSequenceMask) << 6;
-        current_char |= *it++ & kSequenceMask;
-      } else if ((c & kFourByteMask) == kFourByteValue) {
-        if (str.end() - it < 4) {
-          continue;
-        }
-
-        current_char = (*it++ & ~kFourByteMask) << 18;
-        current_char |= (*it++ & kSequenceMask) << 12;
-        current_char |= (*it++ & kSequenceMask) << 6;
-        current_char |= *it++ & kSequenceMask;
-      }
-
-      int width = wcwidth(current_char);
-      if (width == -1) {
-        LogWarning("wcwidth of %s (%d) returned -1 [%d:%d)",
-                   std::string_view(signed_str.data() + pos, it - str.begin() - pos),
-                   (current_char), pos, it - str.begin());
-      }
-      info.char_indexes.push_back(pos);
-      info.char_widths.push_back(width);
-      info.total_width += width;
-    }
-
-    return info;
-  }
-};
-
-class ProgressState {
-public:
-  enum class Action {
-    kDownload,
-    kVerify,
-  };
-
-  ProgressState(Action action, std::string_view item):
-    action(action), item(item), item_utf8(Utf8WidthInformation::ForString(item)) {}
-
-  std::string BuildLine(double progress) {
-    struct winsize ws;
-    int columns = 75;
-    if (ioctl(1, TIOCGWINSZ, &ws) == -1) {
-      LogErrno("ioctl(1, TIOCGWINSZ)");
-    } else {
-      columns = ws.ws_col;
-    }
-
-    // Leave an extra space.
-    columns--;
-
-    // (iostreams aren't the fastest here and not too useful, might as well build it ourselves.)
-    // XXX: trying to get a decent-length buffer size, assume any char may be full-width UTF-8.
-    std::string result(std::max(columns * 4, 15), ' ');
-    auto it = result.begin();
-
-    std::string_view action_string;
-    switch (action) {
-    case Action::kDownload:
-      action_string = kDownloadActionString;
-      break;
-    case Action::kVerify:
-      action_string = kVerifyActionString;
-      break;
-    }
-
-    it = std::copy(action_string.begin(), action_string.end(), it);
-    it++;
-
-    // 1/3 the screen width for the item, at most.
-    int item_space = columns / 3;
-    if (item_utf8.total_width > item_space) {
-      constexpr std::string_view kEllipses = "...";
-      it = std::copy(kEllipses.begin(), kEllipses.end(), it);
-
-      // Figure out how many UTF-8 chars to print.
-      int current_width = 0;
-      auto width_it = item_utf8.char_widths.rbegin();
-      for (; width_it != item_utf8.char_widths.rend(); width_it++) {
-        if (current_width + *width_it > item_space - kEllipses.size()) {
-          width_it--;
-          break;
-        }
-
-        current_width += *width_it;
-      }
-
-      // Find the byte character index and copy it over.
-      size_t index = item_utf8.char_indexes[item_utf8.char_widths.rend() - width_it];
-      it = std::copy(item.begin() + index, item.end(), it);
-    } else {
-      it = std::copy(item.begin(), item.end(), it);
-      it += item_space - item_utf8.total_width - 1;
-    }
-
-    it++;
-    *it++ = '[';
-
-    // Action character + space + item + space + opening bracket.
-    int cols_taken = 1 + 1 + item_space + 1 + 1;
-    // Closing bracket + space + max percent size (XXX.X%).
-    constexpr int kExtraLength = 1 + 1 + 6;
-
-    int remaining_cols = columns - cols_taken - kExtraLength;
-    int filled_cols = remaining_cols * progress;
-
-    for (int i = 0; i < remaining_cols; i++) {
-      *it++ = i < filled_cols ? '=' : '-';
-    }
-
-    *it++ = ']';
-    *it++ = ' ';
-
-    int progress_factor = 1000;
-    int progress_scaled = progress * progress_factor;
-    for (int i = 0; i < 4; i++) {
-      if (i == 3) {
-        *it++ = '.';
-      }
-
-      int digit = progress_scaled / progress_factor;
-      if (digit == 0 && i < 2) {
-        *it++ = ' ';
-      } else {
-        *it++ = digit + '0';
-      }
-      progress_scaled -= digit * progress_factor;
-      progress_factor /= 10;
-    }
-
-    *it++ = '%';
-
-    result.resize(it - result.begin());
-    return result;
-  }
-
-private:
-  constexpr static const char kDownloadActionString[] = "↓";
-  constexpr static const char kVerifyActionString[] = "✓";
-
-  Action action;
-  std::string_view item;
-  const Utf8WidthInformation item_utf8;
-};
 
 class FileIntegrityTask : public Task {
 public:
@@ -241,7 +46,8 @@ public:
     Sha256Builder builder;
 
     auto line = ConsoleLine::Claim();
-    ProgressState progress(ProgressState::Action::kVerify, path);
+    constexpr std::string_view kVerifyAction = "✓";
+    ProgressBuilder progress(kVerifyAction, path);
 
     size_t total_bytes_processed = 0;
     size_t total_bytes = lseek(*fd, 0, SEEK_END);
@@ -325,7 +131,8 @@ public:
     uint64_t total_bytes = 0;
 
     auto line = ConsoleLine::Claim();
-    ProgressState progress(ProgressState::Action::kDownload, path);
+    constexpr std::string_view kDownloadAction = "↓";
+    ProgressBuilder progress(kDownloadAction, path);
 
     LogVerbose("Starting transfer of %s", path);
 

@@ -57,6 +57,10 @@ cc_binary(
   name = 'netpull_client',
   srcs = [
     'netpull/client/main.cc',
+    'netpull/client/progress_builder.h',
+    'netpull/client/progress_builder.cc',
+    'netpull/client/utf8.h',
+    'netpull/client/utf8.cc',
   ],
   deps = [
     ':netpull_common',
