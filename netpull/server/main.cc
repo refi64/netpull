@@ -89,7 +89,7 @@ public:
 
     absl::Time now = absl::Now();
 
-    if (!(log << "# Job created at  " << now << " for :" << std::endl
+    if (!(log << "# Job created at " << now << " for:" << std::endl
               << kPathPrefix << path << std::endl)) {
       LogErrno("Failed to write to %s", absl::FormatStreamed(log_path));
       return {};
