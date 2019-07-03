@@ -32,6 +32,10 @@ $ bazel build //...
 to build everything. This should leave two binaries in `bazel-bin`: `netpull_server` and
 `netpull_client`.
 
+Note that the build may take a bit because this builds vendored copies of Abseil, protobuf,
+and BoringSSL. (Well, also a custom one-file wcwidth from Termux, but if that's the compilation
+bottleneck then you *really* need a better system.)
+
 ## Running the server
 
 ```
@@ -126,3 +130,13 @@ $ ls -lt ~/.cache/netpull | less
 
 to show all the recent job IDs, starting at the most recent. Then you can figure out which run
 you want to resume from there.
+
+## What to do if something fails
+
+If the client says that the connection was interrupted, received 0 bytes, broken pipe, etc.,
+then check the server to see if it's printed error logs.
+
+If the client or server crashes, try to get a coredump and stack trace
+(`coredumpctl debug netpull_server` or `coredumpctl debug netpull_client`), then file a bug.
+You may need to perform a debug build for that to work
+(`bazel build //... --compilation_mode=dbg`).
