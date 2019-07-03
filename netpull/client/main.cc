@@ -102,11 +102,13 @@ private:
   const IpLocation& server;
 };
 
+// Convert a protobuf timestamp to a timespec.
 void CopyProtoTimestampToTimespec(struct timespec* out, const google::protobuf::Timestamp& ts) {
   out->tv_sec = ts.seconds();
   out->tv_nsec = ts.nanos();
 }
 
+// Set the path's timestamps (relative to destfd) from the given PullObject times.
 bool SetTimestamps(const ScopedFd& destfd, std::string_view path,
                    const proto::PullResponse::PullObject::Times& proto_times) {
   std::array<struct timespec, 2> times;
@@ -227,6 +229,7 @@ private:
   const IpLocation& server;
 };
 
+// Handle a new file transfer.
 void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
                     const ScopedFd& destfd, const IpLocation& server, WorkerPool* pool,
                     SubmissionKey* key, std::string_view job,
@@ -330,6 +333,7 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   }
 }
 
+// Manages printing progress to the console.
 void ConsoleUpdateThread(std::unique_ptr<ConsoleLine> status_line,
                          const absl::Notification& notification,
                          std::atomic<int64_t>* total_bytes_transferred,
@@ -364,6 +368,7 @@ void PrintJobResumeMessage(std::string job) {
             << std::endl;
 }
 
+// Handles SIGINTs and prints a resume message.
 class SigintHandler {
 public:
   static void Activate(std::string job) {

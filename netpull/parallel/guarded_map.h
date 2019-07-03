@@ -9,6 +9,8 @@
 
 namespace netpull {
 
+// A thread-safe wrapper over a flat_hash_map, with special members to better suit a parallel
+// use case.
 template <typename K, typename V>
 class GuardedMap {
 public:
@@ -21,6 +23,8 @@ public:
   using key_type = K;
   using mapped_type = V;
 
+  // Place the given key and value into the map, returning true if it was actually inserted,
+  // or false if the insertion failed due to the key already being present.
   bool Put(const K& k, const V& v) {
     absl::MutexLock lock(mutex.get());
     return data.try_emplace(k, v).second;
@@ -31,10 +35,9 @@ public:
     return data.try_emplace(k, v).second;
   }
 
-  std::optional<V> GetAndPop(const K& k) {
-    GetAndPopIf(k, []() { return true; });
-  }
-
+  // Find the given key. If its value, when passed to decider, returns in true, then
+  // remove it from the map, and return it. If the decider was false, or the key was not
+  // present, return an empty optional.
   template <typename F, typename = std::enable_if_t<std::is_invocable_r_v<bool, F, const V&>>>
   std::optional<V> GetAndPopIf(const K& k, F decider) {
     absl::MutexLock lock(mutex.get());
@@ -50,6 +53,12 @@ public:
     return {};
   }
 
+  // Similar to GetAndPopIf, but the decider always returns true.
+  std::optional<V> GetAndPop(const K& k) {
+    GetAndPopIf(k, []() { return true; });
+  }
+
+  // Wait until the GuardedMap is empty.
   void WaitForEmpty() {
     mutex->LockWhen(absl::Condition(&GuardedMap<K, V>::StaticConditionCheck, this));
     mutex->Unlock();

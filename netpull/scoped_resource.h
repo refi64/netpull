@@ -12,6 +12,8 @@
 
 namespace netpull {
 
+// A ScopedResource encapsulates some object / resource of type Type. Upon destruction, the
+// ScopedResource will call an instance of Deleter on the object to release its resources.
 template <typename Type, typename Deleter>
 class ScopedResource {
 public:
@@ -32,10 +34,12 @@ public:
     reset();
   }
 
+  // Is the resource empty?
   bool empty() const {
     return !value_;
   }
 
+  // Release the contents of this resource and reset it.
   void reset() {
     if (!empty()) {
       deleter(**this);
@@ -44,10 +48,13 @@ public:
     value_.reset();
   }
 
+  // Same as above, but places a new value in place of the old one.
   void reset(Type value) {
+    reset();
     value_ = value;
   }
 
+  // Access the resource.
   const Type& operator*() const {
     return *value_;
   }
@@ -64,6 +71,7 @@ public:
     return &*value_;
   }
 
+  // Remove the resource from the ScopedResource's management.
   Type steal() {
     auto copy = *value_;
     value_.reset();
@@ -87,7 +95,9 @@ namespace scoped_resource_internal {
   };
 }
 
+// A ScopedResource specialization for file descriptors.
 using ScopedFd = ScopedResource<int, scoped_resource_internal::FdDeleter>;
+// A ScopedResource specialization that runs an arbitrary function on destruction.
 using ScopedDefer = ScopedResource<std::function<void()>,
                                    scoped_resource_internal::DeferDeleter>;
 

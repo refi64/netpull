@@ -41,6 +41,7 @@
 
 using namespace netpull;
 
+// Represents the environment of the server.
 class Environment {
 public:
   static Environment Create() {
@@ -60,6 +61,7 @@ private:
   Path xdg_cache_home_;
 };
 
+// A pull job that is being run.
 class Job {
 public:
   Job() {}
@@ -68,6 +70,7 @@ public:
 
   Job& operator=(Job&& other)=default;
 
+  // Create a new pull job for the given path.
   static std::optional<Job> New(const Environment& env, PathView path) {
     std::string id = SecureRandomId();
     Path job_dir = env.xdg_cache_home() / "netpull";
@@ -95,6 +98,7 @@ public:
     return Job(id, path, std::move(log), {});
   }
 
+  // Load a pre-existing pull job.
   static std::optional<Job> Load(const Environment& env, std::string id) {
     Path log_path = env.xdg_cache_home() / "netpull" / id;
     std::fstream log(log_path.path());
@@ -137,10 +141,12 @@ public:
     return Job(id, path, std::move(log), std::move(completed_paths));
   }
 
+  // Has this job already completed sending the given path?
   bool IsCompleted(std::string_view path) const {
     return completed_paths.Contains(path.data());
   }
 
+  // Mark the path as completed.
   // This function is NOT thread-safe.
   void MarkCompleted(std::string_view path) {
     completed_paths.Insert(path.data());
@@ -276,18 +282,20 @@ private:
   uint64_t bytes;
 };
 
+// A file that is ready to be streamed.
 struct ReadyFile {
   IpAddress address;
   Path path;
   uint64_t bytes;
 };
 
+using ReadyFilesMap = GuardedMap<std::string, ReadyFile>;
+
+// Convert the given timespec to a protobuf timestamp.
 void CopyTimespecToProtoTimestamp(google::protobuf::Timestamp* out, const struct timespec& ts) {
   out->set_seconds(ts.tv_sec);
   out->set_nanos(ts.tv_nsec);
 }
-
-using ReadyFilesMap = GuardedMap<std::string, ReadyFile>;
 
 class ClientSendCrawler : public FastCrawler {
 public:
@@ -389,9 +397,7 @@ private:
   int total_ = 0;
 };
 
-// Don't pass in a ScopedFd to threads to avoid conflicts between its lifetime on the parent
-// thread and on the target thread.
-
+// Managers the crawling and send operations for a single clien.t
 void ClientManagerThread(PathView root, WorkerPool* pool, ReadyFilesMap* ready_files,
                          SocketConnection conn, const Job& job) {
   if (!job.path().IsAbsolute() || !job.path().IsResolved()) {

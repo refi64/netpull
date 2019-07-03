@@ -8,19 +8,25 @@ package netpull.proto;
 
 import "google/protobuf/timestamp.proto";
 
+// A request from the client to the server.
 message PullRequest {
+  // Request to start a new pull.
   message PullStart {
     string path = 1;
   }
 
+  // Request to continue a running pull job.
   message PullContinue {
     string job = 1;
   }
 
+  // Request to download the file with the given ID as part of a job. In response, the
+  // server will stream the file's contents.
   message PullFile {
     string id = 1;
   }
 
+  // Notifies the server that the given pull was successful.
   message PullObjectSuccess {
     string job = 1;
     string path = 2;
@@ -34,22 +40,30 @@ message PullRequest {
   }
 }
 
+// A response from the server to the client.
 message PullResponse {
+  // As a response to PullStart or PullContinue, notifies the client that a job has been
+  // started/resumed.
   message Started {
     string job = 1;
   }
 
+  // Notifies the client that the current job has completed.
   message Finished {
     int64 total = 1;
   }
 
+  // Sends an object to the client containing data to be created. If transfer is set, then
+  // the client should send a PullFile request to pull the given file.
   message PullObject {
+    // The type of the object.
     enum Type {
       kTypeDirectory = 0;
       kTypeFile = 1;
       kTypeSymlink = 2;
     };
 
+    // Ownership data.
     message Ownership {
       int32 uid = 1;
       int32 gid = 2;
@@ -57,26 +71,36 @@ message PullResponse {
       string group = 4;
     }
 
+    // Access and modify times (with nanosecond precision).
     message Times {
       google.protobuf.Timestamp access = 1;
       google.protobuf.Timestamp modify = 2;
     }
 
+    // Information about a file that should be pulled via a PullFile request.
     message FileTransferInfo {
+      // Used to check the integrity after pull is complete.
       string sha256 = 1;
+      // How many bytes?
       int32 bytes = 2;
+      // Unique ID to send in the PullFile request.
       string id = 3;
     }
 
+    // Contains data that does NOT apply to symlinks.
     message NonlinkData {
       int32 perms = 1;
     }
 
+    // Contains data that applies to symlinks.
     message SymlinkData {
       string target = 1;
+      // Was this symlink an absolute path pointing to the server's root? If so, it needs to
+      // be re-adjusted on the client's end.
       bool relative_to_root = 2;
     }
 
+    // The number this object is.
     int64 number = 1;
     string path = 2;
     Type type = 3;
@@ -91,6 +115,7 @@ message PullResponse {
     }
   }
 
+  // An error has occurred. :/
   message Error {
     string message = 1;
   }

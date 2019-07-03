@@ -7,18 +7,28 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/types/span.h"
+
 namespace netpull {
 
+// Utf8WidthInformation contains Unicode character information for a UTF-8 string. For each
+// Unicode character in the given string, it will calculate information about it stored in
+// CharacterInfo.
 class Utf8WidthInformation {
 public:
   struct CharacterInfo {
+    // Character's index in the UTF-8 byte string.
     size_t index;
+    // Character's terminal width (amount of columns it would take to print).
     int width;
   };
 
-  const std::vector<CharacterInfo>& characters() const { return characters_; }
+  // Returns the collected character information.
+  absl::Span<const CharacterInfo> characters() const { return characters_; }
+  // Returns the total terminal width of the string.
   size_t total_width() const { return total_width_; }
 
+  // Calculates the Utf8WidthInformation for the given string_view.
   static Utf8WidthInformation ForString(std::string_view str);
 
 private:

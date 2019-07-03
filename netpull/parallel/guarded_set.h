@@ -9,6 +9,8 @@
 
 namespace netpull {
 
+// A thread-safe wrapper over a flat_hash_set, with special members to better suit a parallel
+// use case.
 template <typename T>
 class GuardedSet {
 public:
@@ -20,6 +22,7 @@ public:
 
   using value_type = T;
 
+  // Insert a new value into the set.
   void Insert(const T& value) {
     absl::MutexLock lock(mutex.get());
     data.insert(value);
@@ -30,15 +33,18 @@ public:
     data.insert(value);
   }
 
+  // Does the set contain the value?
   bool Contains(const T& value) const {
     absl::MutexLock lock(mutex.get());
     return data.contains(value);
   }
 
+  // Remove a value from the set.
   void Erase(const T& value) {
     data.erase(value);
   }
 
+  // Move the set's contents out of the GuardedSet. THIS FUNCTION IS NOT THREAD-SAFE.
   absl::flat_hash_set<T> Pull() {
     return std::move(data);
   }

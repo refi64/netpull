@@ -17,21 +17,29 @@
 
 namespace netpull {
 
+// A FastCrawler is designed to quickly crawl large directory trees. Subclasses should
+// implement HandleObject, where they will be passed all filesystem objects found during a crawl.
 class FastCrawler {
 public:
   FastCrawler() {}
 
+  // Represents an entity on the filesystem.
   class FsObject {
   public:
     enum class Type { kDirectory, kFile, kSymlink };
 
     Type type() const { return type_; }
-    // The resolved path to the root directory being crawled.
+    // The name of the object (the last component of the path).
     std::string_view name() const { return name_; }
+    // The root path being visited that this object was found somewhere underneath.
     PathView root() const { return root_; }
+    // The full path to the object.
     const Path& path() const { return path_; }
+    // If this is a link, then this will return the link's target.
     const Path& link_target() const { return link_target_; }
+    // Returns the inode ID.
     std::int64_t inode() const { return inode_; }
+    // Returns the stat results of the filesystem object (not following symlinks).
     const struct stat& stat() const { return stat_; }
 
   private:
@@ -50,9 +58,12 @@ public:
 
   FastCrawler(const FastCrawler& other)=delete;
 
+  // Visits the given root path. This path will be the result of calling root() on any of
+  // the resulting objects.
   void Visit(PathView root);
 
 protected:
+  // HandleObject should be implemented by FastCrawler subclasses.
   virtual void HandleObject(const FsObject& object)=0;
 
 private:
