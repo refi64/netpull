@@ -12,32 +12,39 @@ namespace netpull {
 template <typename T>
 class GuardedSet {
 public:
-  GuardedSet() {}
+  GuardedSet(): mutex(new absl::Mutex) {}
   GuardedSet(const GuardedSet<T>& other)=delete;
   GuardedSet(GuardedSet<T>&& other)=default;
+
+  GuardedSet<T>& operator=(GuardedSet<T>&& other)=default;
 
   using value_type = T;
 
   void Insert(const T& value) {
-    absl::MutexLock lock(&mutex);
+    absl::MutexLock lock(mutex.get());
     data.insert(value);
   }
 
   void Insert(T&& value) {
-    absl::MutexLock lock(&mutex);
+    absl::MutexLock lock(mutex.get());
     data.insert(value);
+  }
+
+  bool Contains(const T& value) const {
+    absl::MutexLock lock(mutex.get());
+    return data.contains(value);
   }
 
   void Erase(const T& value) {
     data.erase(value);
   }
 
-  absl::flat_hash_set<T> pull() {
+  absl::flat_hash_set<T> Pull() {
     return std::move(data);
   }
 
 private:
-  absl::Mutex mutex;
+  mutable std::unique_ptr<absl::Mutex> mutex;
   absl::flat_hash_set<T> data;
 };
 

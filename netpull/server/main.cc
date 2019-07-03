@@ -17,15 +17,18 @@
 #include <thread>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/strings/match.h"
+#include "absl/time/time.h"
 
 #include "netpull/console.h"
 #include "netpull/crypto.h"
 #include "netpull/network/ip.h"
 #include "netpull/network/socket.h"
 #include "netpull/parallel/guarded_map.h"
+#include "netpull/parallel/guarded_set.h"
 #include "netpull/parallel/worker_pool.h"
 #include "netpull/scoped_resource.h"
 
@@ -35,6 +38,132 @@
 #include "netpull/server/path.h"
 
 using namespace netpull;
+
+class Environment {
+public:
+  static Environment Create() {
+    if (const char* xdg_cache_home_cstr = getenv("XDG_CACHE_HOME")) {
+      return Path(xdg_cache_home_cstr);
+    } else {
+      const char* home = getenv("HOME");
+      return PathView(home) / ".cache";
+    }
+  }
+
+  const Path& xdg_cache_home() const { return xdg_cache_home_; }
+
+private:
+  Environment(Path xdg_cache_home): xdg_cache_home_(std::move(xdg_cache_home)) {}
+
+  Path xdg_cache_home_;
+};
+
+class Job {
+public:
+  Job() {}
+  Job(const Job& other)=delete;
+  Job(Job&& other)=default;
+
+  Job& operator=(Job&& other)=default;
+
+  static std::optional<Job> New(const Environment& env, PathView path) {
+    std::string id = SecureRandomId();
+    Path job_dir = env.xdg_cache_home() / "netpull";
+    if (mkdir(job_dir.path().data(), 0755) == -1 && errno != EEXIST) {
+      LogErrno("Failed to create job path");
+      return {};
+    }
+
+    Path log_path = job_dir / id;
+    std::fstream log(log_path.path(),
+                     std::fstream::in | std::fstream::out | std::fstream::trunc);
+    if (!log) {
+      LogErrno("Failed to open %s", absl::FormatStreamed(log_path));
+      return {};
+    }
+
+    absl::Time now = absl::Now();
+
+    if (!(log << "# Job created at  " << now << " for :" << std::endl
+              << kPathPrefix << path << std::endl)) {
+      LogErrno("Failed to write to %s", absl::FormatStreamed(log_path));
+      return {};
+    }
+
+    return Job(id, path, std::move(log), {});
+  }
+
+  static std::optional<Job> Load(const Environment& env, std::string id) {
+    Path log_path = env.xdg_cache_home() / "netpull" / id;
+    std::fstream log(log_path.path());
+    if (!log) {
+      LogErrno("Failed to open %s", absl::FormatStreamed(log_path));
+      return {};
+    }
+
+    std::string line;
+    std::string path_str;
+    GuardedSet<std::string> completed_paths;
+
+    while (std::getline(log, line)) {
+      std::string_view view(line);
+
+      if (absl::StartsWith(view, "#")) {
+        continue;
+      } else if (absl::StartsWith(view, kPathPrefix)) {
+        view.remove_prefix(kPathPrefix.size());
+        path_str = view;
+      } else if (absl::StartsWith(view, kCompletedPrefix)) {
+        view.remove_prefix(kCompletedPrefix.size());
+        completed_paths.Insert(std::string(view));
+      }
+    }
+
+    if (!log.eof()) {
+      LogErrno("Failed to read %s", absl::FormatStreamed(log_path));
+      return {};
+    }
+
+    log.clear();
+
+    Path path(path_str);
+    if (!path.IsResolved()) {
+      LogError("%s is not a resolved path", absl::FormatStreamed(path));
+      return {};
+    }
+
+    return Job(id, path, std::move(log), std::move(completed_paths));
+  }
+
+  bool IsCompleted(std::string_view path) const {
+    return completed_paths.Contains(path.data());
+  }
+
+  // This function is NOT thread-safe.
+  void MarkCompleted(std::string_view path) {
+    completed_paths.Insert(path.data());
+
+    if (!(log << kCompletedPrefix << path << std::endl)) {
+      LogErrno("Failed to mark %s as completed", path);
+    }
+  }
+
+  const std::string& id() const { return id_; }
+  const Path& path() const { return path_; }
+
+private:
+  Job(std::string id, Path path, std::fstream&& log, GuardedSet<std::string> completed_paths):
+    id_(std::move(id)), path_(std::move(path)), log(std::move(log)),
+    completed_paths(std::move(completed_paths)) {}
+
+  static constexpr std::string_view kPathPrefix = "Path ";
+  static constexpr std::string_view kCompletedPrefix = "Completed ";
+
+  std::string id_;
+  Path path_;
+  std::fstream log;
+  GuardedSet<std::string> completed_paths;
+};
 
 enum class TaskPriority {
   kFileIntegrity = 0,
@@ -154,18 +283,18 @@ struct ReadyFile {
   uint64_t bytes;
 };
 
-using ReadyFilesMap = GuardedMap<std::string, ReadyFile>;
-
 void CopyTimespecToProtoTimestamp(google::protobuf::Timestamp* out, const struct timespec& ts) {
   out->set_seconds(ts.tv_sec);
   out->set_nanos(ts.tv_nsec);
 }
 
+using ReadyFilesMap = GuardedMap<std::string, ReadyFile>;
+
 class ClientSendCrawler : public FastCrawler {
 public:
-  ClientSendCrawler(SubmissionKey* key, WorkerPool* pool, ReadyFilesMap* ready_files,
-                    SocketConnection* conn):
-    key(key), pool(pool), ready_files(ready_files), conn(conn){}
+  ClientSendCrawler(const Job& job, SubmissionKey* key, WorkerPool* pool,
+                    ReadyFilesMap* ready_files, SocketConnection* conn):
+    job(job), key(key), pool(pool), ready_files(ready_files), conn(conn){}
 
   int total() { return total_; }
 
@@ -173,9 +302,14 @@ protected:
   void HandleObject(const FsObject& object) override {
     LogVerbose("Found %s", absl::FormatStreamed(object.path()));
 
+    PathView relative_path = PathView(object.path()).RelativeTo(PathView(object.root()));
+    if (job.IsCompleted(relative_path.path())) {
+      LogVerbose("Skipping %s because it's already completed",
+                 absl::FormatStreamed(relative_path));
+      return;
+    }
+
     int number = ++total_;
-    PathView relative_path = PathView(object.path())
-                              .RelativeTo(PathView(object.root()));
 
     proto::PullResponse resp;
     proto::PullResponse::PullObject* pull = resp.mutable_object();
@@ -247,6 +381,7 @@ protected:
   }
 
 private:
+  const Job& job;
   SubmissionKey* key;
   WorkerPool* pool;
   ReadyFilesMap* ready_files;
@@ -259,10 +394,10 @@ private:
 // thread and on the target thread.
 
 void ClientManagerThread(PathView root, WorkerPool* pool, ReadyFilesMap* ready_files,
-                         SocketConnection conn, Path path) {
+                         SocketConnection conn, const Job& job) {
   SubmissionKey key;
 
-  if (!path.IsAbsolute() || !path.IsResolved()) {
+  if (!job.path().IsAbsolute() || !job.path().IsResolved()) {
     proto::PullResponse resp;
     resp.mutable_error()->set_message("Paths must be absolute.");
     conn.SendProtobufMessage(resp);
@@ -271,14 +406,14 @@ void ClientManagerThread(PathView root, WorkerPool* pool, ReadyFilesMap* ready_f
 
   proto::PullResponse start_resp;
   proto::PullResponse::Started* started = start_resp.mutable_started();
-  started->set_job("0");  // TODO
+  started->set_job(job.id());
 
   if (!conn.SendProtobufMessage(start_resp)) {
     return;
   }
 
-  ClientSendCrawler crawler(&key, pool, ready_files, &conn);
-  crawler.Visit(root / path);
+  ClientSendCrawler crawler(job, &key, pool, ready_files, &conn);
+  crawler.Visit(root / job.path());
   key.WaitForPending();
 
   LogVerbose("Sending done message");
@@ -313,12 +448,22 @@ int main(int argc, char** argv) {
     EnableVerboseLogging();
   }
 
+  auto env = Environment::Create();
+
   WorkerPool pool(absl::GetFlag(FLAGS_workers));
   pool.Start();
 
   ReadyFilesMap ready_files;
 
-  std::string root = absl::GetFlag(FLAGS_root);
+  std::string root_str = absl::GetFlag(FLAGS_root);
+  auto opt_root = Path(root_str).Resolve();
+  if (!opt_root) {
+    return 1;
+  }
+
+  PathView root = *opt_root;
+
+  absl::flat_hash_map<std::string, Job> jobs;
 
   auto allow_ip_ranges = absl::GetFlag(FLAGS_allow_ip_ranges);
   auto deny_ip_ranges = absl::GetFlag(FLAGS_deny_ip_ranges);
@@ -357,16 +502,37 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    if (req.has_start()) {
-      Path path = req.start().path();
-      LogInfo("Client %s requested to start %s", absl::FormatStreamed(conn->peer()),
-              absl::FormatStreamed(path));
+    if (req.has_start() || req.has_continue_()) {
+      Job job;
 
-      std::thread(ClientManagerThread, PathView(root), &pool, &ready_files, std::move(*conn),
-                  std::move(path)).detach();
+      if (req.has_start()) {
+        Path path = req.start().path();
+        LogInfo("Client %s requested to start %s", absl::FormatStreamed(conn->peer()),
+                absl::FormatStreamed(path));
+
+        if (auto opt_job = Job::New(env, path)) {
+          job = std::move(*opt_job);
+        } else {
+          continue;
+        }
+      } else if (req.has_continue_()) {
+        std::string job_id = req.continue_().job();
+        if (auto opt_job = Job::Load(env, job_id)) {
+          job = std::move(*opt_job);
+        } else {
+          continue;
+        }
+      } else {
+        assert(false);
+      }
+
+      std::string id = job.id();
+      jobs.emplace(id, std::move(job));
+      std::thread(ClientManagerThread, root, &pool, &ready_files, std::move(*conn),
+                  std::ref(jobs[id])).detach();
     } else if (req.has_file()) {
       std::string id = req.file().id();
-      LogInfo("Client %s requested file %s", absl::FormatStreamed(conn->peer()), id);
+      LogVerbose("Client %s requested file %s", absl::FormatStreamed(conn->peer()), id);
 
       auto opt_ready = ready_files.GetAndPopIf(id, [&](const ReadyFile& ready) -> bool {
         return conn->peer() == ready.address;
@@ -377,6 +543,15 @@ int main(int argc, char** argv) {
                                        opt_ready->bytes);
         pool.Submit(std::unique_ptr<Task>(task));
       }
+    } else if (req.has_success()) {
+      auto it = jobs.find(req.success().job());
+      if (it == jobs.end()) {
+        LogError("Missing job ID: %s", req.success().job());
+        continue;
+      }
+
+      auto& job = it->second;
+      job.MarkCompleted(req.success().path());
     }
   }
 

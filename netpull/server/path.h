@@ -17,6 +17,7 @@ namespace path_internal {
   bool IsAbsolute(std::string_view self);
   bool IsResolved(std::string_view self);
   bool IsChildOf(std::string_view self, std::string_view other);
+  std::optional<std::string> Resolve(std::string_view self);
 
 }
 
@@ -49,21 +50,33 @@ public:
     return path_internal::Join(path_, other.path());
   }
 
-  bool IsAbsolute() {
+  PathBase<std::string> operator/(std::string_view other) const {
+    return path_internal::Join(path_, other);
+  }
+
+  bool IsAbsolute() const {
     return path_internal::IsAbsolute(path_);
   }
 
-  bool IsResolved() {
+  bool IsResolved() const {
     return path_internal::IsResolved(path_);
   }
 
-  bool IsChildOf(PathBase<std::string_view> other) {
+  bool IsChildOf(PathBase<std::string_view> other) const {
     return path_internal::IsChildOf(path_, other.path());
   }
 
-  PathBase<T> RelativeTo(PathBase<std::string_view> other) {
+  PathBase<T> RelativeTo(PathBase<std::string_view> other) const {
     assert(IsChildOf(other));
     return path_.substr(other.path().size() + 1);
+  }
+
+  std::optional<PathBase<std::string>> Resolve() const {
+    if (auto opt_path = path_internal::Resolve(path_)) {
+      return *opt_path;
+    } else {
+      return {};
+    }
   }
 
 private:

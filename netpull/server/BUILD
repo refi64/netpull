@@ -3,7 +3,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 cc_binary(
-  name = 'netpull_server',
+  name = 'server',
   srcs = [
     'fast_crawler.h',
     'fast_crawler.cc',
@@ -16,8 +16,11 @@ cc_binary(
     '//netpull:cc_proto',
     '//netpull/network',
     '//netpull/parallel',
+    '@com_google_absl//absl/container:flat_hash_map',
     '@com_google_absl//absl/flags:flag',
     '@com_google_absl//absl/flags:parse',
+    '@com_google_absl//absl/time',
     '@com_google_absl//absl/strings',
   ],
+  visibility = ['//visibility:public'],
 )

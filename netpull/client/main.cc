@@ -9,6 +9,7 @@
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/strings/match.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/time.h"
 
@@ -27,11 +28,11 @@ using namespace netpull;
 
 class FileIntegrityTask : public Task {
 public:
-  FileIntegrityTask(SubmissionKey* key, GuardedSet<std::string>* to_complete,
-                    const std::string& expected_digest, const ScopedFd& destfd,
-                    std::string path):
-    Task(key), to_complete(to_complete), expected_digest(expected_digest), destfd(destfd),
-    path(path) {}
+  FileIntegrityTask(SubmissionKey* key, std::string_view& job,
+                    GuardedSet<std::string>* to_complete, const std::string& expected_digest,
+                    const ScopedFd& destfd, std::string path, const IpLocation& server):
+    Task(key), job(job), to_complete(to_complete), expected_digest(expected_digest),
+    destfd(destfd), path(path), server(server) {}
 
   void Run(WorkerPool* pool) override {
     ScopedFd fd;
@@ -77,13 +78,26 @@ public:
         to_complete->Erase(path);
       }
     }
+
+    auto conn = SocketConnection::Connect(server);
+    if (!conn) {
+      return;
+    }
+
+    proto::PullRequest req;
+    proto::PullRequest::PullObjectSuccess* success = req.mutable_success();
+    success->set_job(job.data());
+    success->set_path(path);
+    conn->SendProtobufMessage(req);
   }
 
 private:
+  std::string_view job;
   GuardedSet<std::string>* to_complete;
   std::string expected_digest;
   const ScopedFd& destfd;
   std::string path;
+  const IpLocation& server;
 };
 
 void CopyProtoTimestampToTimespec(struct timespec* out, const google::protobuf::Timestamp& ts) {
@@ -107,13 +121,14 @@ bool SetTimestamps(const ScopedFd& destfd, std::string_view path,
 
 class FileStreamTask : public Task {
 public:
-  FileStreamTask(SubmissionKey* key, GuardedSet<std::string>* to_complete,
+  FileStreamTask(SubmissionKey* key, std::string_view job, GuardedSet<std::string>* to_complete,
                  std::atomic<int64_t>* total_bytes_transferred,
                  std::atomic<int64_t>* total_items_transferred,
                  proto::PullResponse::PullObject::FileTransferInfo transfer,
                  proto::PullResponse::PullObject::Times times,
                  const ScopedFd& destfd, std::string path, const IpLocation& server):
-    Task(key), to_complete(to_complete), total_bytes_transferred(total_bytes_transferred),
+    Task(key), job(job), to_complete(to_complete),
+    total_bytes_transferred(total_bytes_transferred),
     total_items_transferred(total_items_transferred), transfer(transfer), times(times),
     destfd(destfd), path(std::move(path)), server(server) {}
 
@@ -193,12 +208,13 @@ public:
       return;
     }
 
-    auto task = new FileIntegrityTask(mutable_key(), to_complete, transfer.sha256(),
-                                      destfd, path);
+    auto task = new FileIntegrityTask(mutable_key(), job, to_complete, transfer.sha256(),
+                                      destfd, path, server);
     pool->Submit(std::unique_ptr<Task>(task));
   }
 
 private:
+  std::string_view job;
   GuardedSet<std::string>* to_complete;
   std::atomic<int64_t>* total_bytes_transferred;
   std::atomic<int64_t>* total_items_transferred;
@@ -211,7 +227,8 @@ private:
 
 void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
                     const ScopedFd& destfd, const IpLocation& server, WorkerPool* pool,
-                    SubmissionKey* key, GuardedSet<std::string>* to_complete,
+                    SubmissionKey* key, std::string_view job,
+                    GuardedSet<std::string>* to_complete,
                     std::atomic<int64_t>* total_bytes_transferred,
                     std::atomic<int64_t>* total_items_transferred) {
   int open_flags = 0;
@@ -297,7 +314,7 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
   // TODO: times
 
   if (pull.has_transfer()) {
-    auto task = new FileStreamTask(key, to_complete, total_bytes_transferred,
+    auto task = new FileStreamTask(key, job, to_complete, total_bytes_transferred,
                                    total_items_transferred, pull.transfer(), pull.times(),
                                    destfd, std::string(path), server);
     pool->Submit(std::unique_ptr<Task>(task));
@@ -357,7 +374,7 @@ int main(int argc, char** argv) {
     EnableVerboseLogging();
   }
 
-  std::string_view directory(c_args[1]), dest(c_args[2]);
+  std::string_view path(c_args[1]), dest(c_args[2]);
 
   if (mkdir(dest.data(), 0755) == -1 && errno != EEXIST) {
     LogErrno("mkdir of %s failed", dest);
@@ -393,12 +410,20 @@ int main(int argc, char** argv) {
   pool.Start();
 
   proto::PullRequest req;
-  proto::PullRequest::PullStart* start = req.mutable_start();
-  start->set_path(std::string(directory));
+  if (absl::StartsWith(path, "@")) {
+    path.remove_prefix(1);
+    proto::PullRequest::PullContinue* continue_ = req.mutable_continue_();
+    continue_->set_job(path.data());
+  } else {
+    proto::PullRequest::PullStart* start = req.mutable_start();
+    start->set_path(std::string(path));
+  }
 
   if (!conn->SendProtobufMessage(req)) {
     return 1;
   }
+
+  std::string job_id;
 
   for (;;) {
     proto::PullResponse resp;
@@ -410,11 +435,13 @@ int main(int argc, char** argv) {
       proto::PullResponse::PullObject pull = resp.object();
       total_items.store(std::max(total_items.load(), pull.number()));
 
+      assert(!job_id.empty());
       assert(pull.path()[0] != '/');
-      HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key, &to_complete,
+      HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key, job_id, &to_complete,
                      &total_bytes_transferred, &total_items_transferred);
     } else if (resp.has_started()) {
-      LogInfo("Pull started, job ID: %s", resp.started().job());
+      job_id = resp.started().job();
+      LogInfo("Pull started, job ID: %s", job_id);
     } else if (resp.has_finished()) {
       key.WaitForPending();
       pool.Done();

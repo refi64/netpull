@@ -44,30 +44,14 @@ static std::optional<std::string> FindUnresolvedLinkTargetAt(int rawparentfd,
   return std::string(buffer.data());
 }
 
-static std::optional<Path> ResolvePath(PathView path) {
-  std::array<char, PATH_MAX + 1> buffer;
-
-  if (realpath(path.path().data(), buffer.data()) == nullptr) {
-    LogErrno("realpath of %s", absl::FormatStreamed(path));
-    return {};
-  }
-
-  return Path(std::string(buffer.data()));
-}
-
 void FastCrawler::Visit(PathView root) {
-  Path resolved_root;
-  if (auto opt_resolved_root = ResolvePath(root)) {
-    resolved_root = *opt_resolved_root;
-  } else {
-    return;
-  }
+  assert(root.IsResolved());
 
-  PumpDirectoryEntries(resolved_root, AT_FDCWD, PathView(""), resolved_root.path());
+  PumpDirectoryEntries(root, AT_FDCWD, PathView(""), root.path());
 
   while (!queue.empty()) {
     auto& item = queue.front();
-    PumpDirectoryEntries(resolved_root, *item.parentfd, item.parent, item.name);
+    PumpDirectoryEntries(root, *item.parentfd, item.parent, item.name);
     queue.pop();
   }
 }

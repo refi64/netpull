@@ -7,6 +7,8 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_split.h"
 
+#include "netpull/console.h"
+
 #include "path.h"
 
 namespace netpull {
@@ -24,6 +26,10 @@ std::string path_internal::Join(std::string_view self, std::string_view other) {
   }
 
   p += other;
+  if (absl::EndsWith(p, "/")) {
+    p.pop_back();
+  }
+
   return p;
 }
 
@@ -56,6 +62,17 @@ bool path_internal::IsChildOf(std::string_view self, std::string_view other) {
   assert(IsAbsolute(other));
   assert(IsResolved(other));
   return absl::StartsWith(self, other);
+}
+
+std::optional<std::string> path_internal::Resolve(std::string_view self) {
+  std::array<char, PATH_MAX + 1> buffer;
+
+  if (realpath(self.data(), buffer.data()) == nullptr) {
+    LogErrno("realpath of %s", self);
+    return {};
+  }
+
+  return buffer.data();
 }
 
 std::ostream& operator<<(std::ostream& os, PathView path) {

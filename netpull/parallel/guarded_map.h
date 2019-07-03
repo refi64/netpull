@@ -12,20 +12,22 @@ namespace netpull {
 template <typename K, typename V>
 class GuardedMap {
 public:
-  GuardedMap() {}
+  GuardedMap(): mutex(new absl::Mutex) {}
   GuardedMap(const GuardedMap<K, V>& other)=delete;
   GuardedMap(GuardedMap<K, V>&& other)=default;
+
+  GuardedMap<K, V>& operator=(GuardedMap<K, V>&& other)=default;
 
   using key_type = K;
   using mapped_type = V;
 
   bool Put(const K& k, const V& v) {
-    absl::MutexLock lock(&mutex);
+    absl::MutexLock lock(mutex.get());
     return data.try_emplace(k, v).second;
   }
 
   bool Put(K&& k, V&& v) {
-    absl::MutexLock lock(&mutex);
+    absl::MutexLock lock(mutex.get());
     return data.try_emplace(k, v).second;
   }
 
@@ -35,7 +37,7 @@ public:
 
   template <typename F, typename = std::enable_if_t<std::is_invocable_r_v<bool, F, const V&>>>
   std::optional<V> GetAndPopIf(const K& k, F decider) {
-    absl::MutexLock lock(&mutex);
+    absl::MutexLock lock(mutex.get());
     auto it = data.find(k);
     if (it != data.end()) {
       if (decider(it->second)) {
@@ -49,8 +51,8 @@ public:
   }
 
   void WaitForEmpty() {
-    mutex.LockWhen(absl::Condition(&GuardedMap<K, V>::StaticConditionCheck, this));
-    mutex.Unlock();
+    mutex->LockWhen(absl::Condition(&GuardedMap<K, V>::StaticConditionCheck, this));
+    mutex->Unlock();
   }
 
 private:
@@ -58,7 +60,7 @@ private:
     return self->data.empty();
   }
 
-  absl::Mutex mutex;
+  std::unique_ptr<absl::Mutex> mutex;
   absl::flat_hash_map<K, V> data;
 };
 

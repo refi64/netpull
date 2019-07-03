@@ -13,13 +13,24 @@ message PullRequest {
     string path = 1;
   }
 
+  message PullContinue {
+    string job = 1;
+  }
+
   message PullFile {
     string id = 1;
   }
 
+  message PullObjectSuccess {
+    string job = 1;
+    string path = 2;
+  }
+
   oneof request {
     PullStart start = 1;
-    PullFile file = 2;
+    PullContinue continue = 2;
+    PullFile file = 3;
+    PullObjectSuccess success = 4;
   }
 }
 
