@@ -18,6 +18,8 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/debugging/failure_signal_handler.h"
+#include "absl/debugging/symbolize.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/strings/match.h"
@@ -185,9 +187,6 @@ public:
     if (!conn->alive()) {
       return;
     }
-
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
 
     std::ifstream is(path.path());
     if (!is) {
@@ -395,8 +394,6 @@ private:
 
 void ClientManagerThread(PathView root, WorkerPool* pool, ReadyFilesMap* ready_files,
                          SocketConnection conn, const Job& job) {
-  SubmissionKey key;
-
   if (!job.path().IsAbsolute() || !job.path().IsResolved()) {
     proto::PullResponse resp;
     resp.mutable_error()->set_message("Paths must be absolute.");
@@ -412,6 +409,7 @@ void ClientManagerThread(PathView root, WorkerPool* pool, ReadyFilesMap* ready_f
     return;
   }
 
+  SubmissionKey key;
   ClientSendCrawler crawler(job, &key, pool, ready_files, &conn);
   crawler.Visit(root / job.path());
   key.WaitForPending();
@@ -435,6 +433,10 @@ ABSL_FLAG(std::vector<IpRange>, deny_ip_ranges, {},
           "Deny IP addresses in this range, @private represents any private IP");
 
 int main(int argc, char** argv) {
+  absl::InitializeSymbolizer(argv[0]);
+  absl::FailureSignalHandlerOptions signal_options;
+  absl::InstallFailureSignalHandler(signal_options);
+
   GOOGLE_PROTOBUF_VERIFY_VERSION;
   signal(SIGPIPE, SIG_IGN);
 
@@ -448,13 +450,6 @@ int main(int argc, char** argv) {
     EnableVerboseLogging();
   }
 
-  auto env = Environment::Create();
-
-  WorkerPool pool(absl::GetFlag(FLAGS_workers));
-  pool.Start();
-
-  ReadyFilesMap ready_files;
-
   std::string root_str = absl::GetFlag(FLAGS_root);
   auto opt_root = Path(root_str).Resolve();
   if (!opt_root) {
@@ -463,8 +458,6 @@ int main(int argc, char** argv) {
 
   PathView root = *opt_root;
 
-  absl::flat_hash_map<std::string, Job> jobs;
-
   auto allow_ip_ranges = absl::GetFlag(FLAGS_allow_ip_ranges);
   auto deny_ip_ranges = absl::GetFlag(FLAGS_deny_ip_ranges);
 
@@ -472,6 +465,15 @@ int main(int argc, char** argv) {
     LogError("At least one allowed IP range must be given.");
     return 1;
   }
+
+  auto env = Environment::Create();
+
+  WorkerPool pool(absl::GetFlag(FLAGS_workers));
+  pool.Start();
+
+  ReadyFilesMap ready_files;
+
+  absl::flat_hash_map<std::string, Job> jobs;
 
   IpLocation host(IpAddress(0, 0, 0, 0), absl::GetFlag(FLAGS_port));
   auto server = SocketServer::Bind(host);

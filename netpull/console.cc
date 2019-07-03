@@ -37,14 +37,14 @@ void console_internal::LogGenericString(LogLevel level, std::string str) {
     std::cout << str << '\n';
     break;
   case LogLevel::kWarning:
-    std::cout
+    std::cerr
       << ansi::kBold << ansi::kFgMagenta << "[WARNING] " << ansi::kReset
       << str << '\n';
     break;
   case LogLevel::kErrno:
     [[fallthrough]];
   case LogLevel::kError:
-    std::cout
+    std::cerr
       << ansi::kBold << ansi::kFgRed << "[ERROR] " << ansi::kReset
       << str;
 

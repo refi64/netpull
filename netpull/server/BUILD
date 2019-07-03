@@ -17,6 +17,8 @@ cc_binary(
     '//netpull/network',
     '//netpull/parallel',
     '@com_google_absl//absl/container:flat_hash_map',
+    '@com_google_absl//absl/debugging:failure_signal_handler',
+    '@com_google_absl//absl/debugging:symbolize',
     '@com_google_absl//absl/flags:flag',
     '@com_google_absl//absl/flags:parse',
     '@com_google_absl//absl/time',

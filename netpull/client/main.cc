@@ -7,6 +7,8 @@
 #include <pwd.h>
 #include <sys/stat.h>
 
+#include "absl/debugging/failure_signal_handler.h"
+#include "absl/debugging/symbolize.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/strings/match.h"
@@ -356,11 +358,45 @@ void ConsoleUpdateThread(std::unique_ptr<ConsoleLine> status_line,
   status_line->Update("Done!");
 }
 
+void PrintJobResumeMessage(std::string job) {
+  std::cerr << "To resume the job next time, use the path: "
+            << ansi::kBold << '@' << job << ansi::kReset
+            << std::endl;
+}
+
+class SigintHandler {
+public:
+  static void Activate(std::string job) {
+    assert(previous_handler == nullptr);
+    SigintHandler::job = job;
+    previous_handler = signal(SIGINT, &SigintHandler::Handle);
+  }
+
+private:
+  static std::string job;
+  static sighandler_t previous_handler;
+
+  static void Handle(int sig) {
+    assert(sig == SIGINT);
+    std::cerr << "\nSIGINT received. ";
+    PrintJobResumeMessage(SigintHandler::job);
+    signal(SIGINT, previous_handler);
+    raise(sig);
+  }
+};
+
+std::string SigintHandler::job;
+sighandler_t SigintHandler::previous_handler;
+
 ABSL_FLAG(bool, verbose, false, "Be verbose");
 ABSL_FLAG(IpLocation, server, IpLocation({127, 0, 0, 1}), "The server to connect to");
 ABSL_FLAG(int, workers, 4, "The default number of file forwarding workers to use");
 
 int main(int argc, char** argv) {
+  absl::InitializeSymbolizer(argv[0]);
+  absl::FailureSignalHandlerOptions signal_options;
+  absl::InstallFailureSignalHandler(signal_options);
+
   GOOGLE_PROTOBUF_VERIFY_VERSION;
   signal(SIGPIPE, SIG_IGN);
 
@@ -393,22 +429,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::atomic<int64_t> total_bytes_transferred(0);
-  std::atomic<int64_t> total_items_transferred(0);
-  std::atomic<int64_t> total_items(0);
-
-  absl::Notification console_update_notification;
-  std::thread console_update_thread(ConsoleUpdateThread, ConsoleLine::Claim(),
-                                    std::ref(console_update_notification),
-                                    &total_bytes_transferred, std::ref(total_items_transferred),
-                                    std::ref(total_items));
-
-  SubmissionKey key;
-  GuardedSet<std::string> to_complete;
-
-  WorkerPool pool(absl::GetFlag(FLAGS_workers));
-  pool.Start();
-
   proto::PullRequest req;
   if (absl::StartsWith(path, "@")) {
     path.remove_prefix(1);
@@ -423,11 +443,31 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  GuardedSet<std::string> to_complete;
+  std::atomic<int64_t> total_bytes_transferred(0);
+  std::atomic<int64_t> total_items_transferred(0);
+  std::atomic<int64_t> total_items(0);
+
+  absl::Notification console_update_notification;
+  std::thread console_update_thread(ConsoleUpdateThread, ConsoleLine::Claim(),
+                                    std::ref(console_update_notification),
+                                    &total_bytes_transferred, std::ref(total_items_transferred),
+                                    std::ref(total_items));
+
+  SubmissionKey key;
+  WorkerPool pool(absl::GetFlag(FLAGS_workers));
+  pool.Start();
+
   std::string job_id;
 
   for (;;) {
     proto::PullResponse resp;
     if (!conn->ReadProtobufMessage(&resp)) {
+      pool.Done();
+      pool.WaitForCompletion();
+
+      console_update_notification.Notify();
+      console_update_thread.join();
       return 1;
     }
 
@@ -442,6 +482,7 @@ int main(int argc, char** argv) {
     } else if (resp.has_started()) {
       job_id = resp.started().job();
       LogInfo("Pull started, job ID: %s", job_id);
+      SigintHandler::Activate(job_id);
     } else if (resp.has_finished()) {
       key.WaitForPending();
       pool.Done();
@@ -449,12 +490,28 @@ int main(int argc, char** argv) {
 
       console_update_notification.Notify();
       console_update_thread.join();
+
+      auto set = to_complete.Pull();
+      if (!set.empty()) {
+        LogError("%d paths did not complete:", set.size());
+        int i = 0;
+        for (const auto& path : set) {
+          if (i++ > 64) {
+            std::cerr << " - ..." << std::endl;
+            break;
+          }
+          std::cerr << " - " << path << std::endl;
+        }
+
+        PrintJobResumeMessage(job_id);
+      }
+
       return 0;
     } else if (resp.has_error()) {
       LogError("Server returned error: %s", resp.error().message());
     } else {
       LogError("Unexpected pull response from server");
-      abort();
+      assert(false);
     }
   }
 
