@@ -8,23 +8,32 @@
 
 namespace netpull {
 
-std::optional<ScopedFd> CreateEmptyIpv4Socket() {
+static std::optional<ScopedFd> CreateEmptyIpv4Socket(int priority) {
   if (int rawfd = socket(AF_INET, SOCK_STREAM, 0); rawfd != -1) {
-    return ScopedFd(rawfd);
+    ScopedFd fd(rawfd);
+
+    if (priority != SocketConnection::kNoPriority) {
+      if (setsockopt(*fd, SOL_SOCKET, SO_PRIORITY, reinterpret_cast<void*>(&priority),
+                     sizeof(priority)) == -1) {
+        LogWarning("Failed to setsockopt(SO_PRIORITY, %d)", priority);
+      }
+    }
+
+    return fd;
   } else {
     LogErrno("Failed to create socket");
     return {};
   }
 }
 
-std::optional<SocketServer> SocketServer::Bind(IpLocation location) {
+std::optional<SocketServer> SocketServer::Bind(IpLocation location, int priority) {
   struct sockaddr_in sockaddr;
   sockaddr.sin_family = AF_INET;
   if (!location.ToUnixSockaddr(&sockaddr)) {
     return {};
   }
 
-  if (auto opt_socket = CreateEmptyIpv4Socket()) {
+  if (auto opt_socket = CreateEmptyIpv4Socket(priority)) {
     ScopedFd fd = std::move(*opt_socket);
 
     int reuseaddr = 1;
@@ -67,14 +76,14 @@ std::optional<SocketConnection> SocketServer::Accept() {
   return {};
 }
 
-std::optional<SocketConnection> SocketConnection::Connect(IpLocation location) {
+std::optional<SocketConnection> SocketConnection::Connect(IpLocation location, int priority) {
   struct sockaddr_in sockaddr;
   sockaddr.sin_family = AF_INET;
   if (!location.ToUnixSockaddr(&sockaddr)) {
     return {};
   }
 
-  if (auto opt_socket = CreateEmptyIpv4Socket()) {
+  if (auto opt_socket = CreateEmptyIpv4Socket(priority)) {
     ScopedFd fd = std::move(*opt_socket);
 
     if (connect(*fd, reinterpret_cast<struct sockaddr*>(&sockaddr), sizeof(sockaddr)) == -1) {

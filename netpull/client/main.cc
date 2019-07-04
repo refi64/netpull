@@ -28,6 +28,12 @@
 
 using namespace netpull;
 
+enum class SocketPriority {
+  kStream = 6,
+  kSuccess = 4,
+  kMain = 4,
+};
+
 class FileIntegrityTask : public Task {
 public:
   FileIntegrityTask(SubmissionKey* key, std::string_view& job,
@@ -81,7 +87,7 @@ public:
       }
     }
 
-    auto conn = SocketConnection::Connect(server);
+    auto conn = SocketConnection::Connect(server, static_cast<int>(SocketPriority::kSuccess));
     if (!conn) {
       return;
     }
@@ -153,7 +159,7 @@ public:
 
     ScopedFd read_end(pipefd[0]), write_end(pipefd[1]);
 
-    auto conn = SocketConnection::Connect(server);
+    auto conn = SocketConnection::Connect(server, static_cast<int>(SocketPriority::kStream));
     if (!conn) {
       return;
     }
@@ -429,7 +435,7 @@ int main(int argc, char** argv) {
   }
 
   IpLocation server = absl::GetFlag(FLAGS_server);
-  auto conn = SocketConnection::Connect(server);
+  auto conn = SocketConnection::Connect(server, static_cast<int>(SocketPriority::kMain));
   if (!conn) {
     return 1;
   }

@@ -20,6 +20,37 @@ ProgressBuilder::ProgressBuilder(std::string_view action, std::string_view item)
   assert(Utf8WidthInformation::ForString(action).total_width() == 1);
 }
 
+template <typename It>
+It PercentToStringIterator(double percent, It it) {
+  int factor = 1000;
+  int scaled_percent = percent * factor;
+  bool all_zeros = true;
+
+  for (int i = 0; i < 4; i++) {
+    if (i == 3) {
+      *it++ = '.';
+    }
+
+    int digit = scaled_percent / factor;
+
+    if (digit == 0) {
+      if (i < 2 && all_zeros) {
+        *it++ = ' ';
+        continue;
+      }
+    } else {
+      all_zeros = false;
+    }
+
+    *it++ = digit + '0';
+    scaled_percent -= digit * scaled_percent;
+    factor /= 10;
+  }
+
+  *it++ = '%';
+  return it;
+}
+
 std::string ProgressBuilder::BuildLine(double progress) const {
   struct winsize ws;
   int columns = 75;
@@ -82,24 +113,7 @@ std::string ProgressBuilder::BuildLine(double progress) const {
   *it++ = ']';
   *it++ = ' ';
 
-  int progress_factor = 1000;
-  int progress_scaled = progress * progress_factor;
-  for (int i = 0; i < 4; i++) {
-    if (i == 3) {
-      *it++ = '.';
-    }
-
-    int digit = progress_scaled / progress_factor;
-    if (digit == 0 && i < 2) {
-      *it++ = ' ';
-    } else {
-      *it++ = digit + '0';
-    }
-    progress_scaled -= digit * progress_factor;
-    progress_factor /= 10;
-  }
-
-  *it++ = '%';
+  it = PercentToStringIterator(progress, it);
 
   result.resize(it - result.begin());
   return result;

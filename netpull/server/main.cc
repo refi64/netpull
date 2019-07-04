@@ -482,7 +482,8 @@ int main(int argc, char** argv) {
   absl::flat_hash_map<std::string, Job> jobs;
 
   IpLocation host(IpAddress(0, 0, 0, 0), absl::GetFlag(FLAGS_port));
-  auto server = SocketServer::Bind(host);
+  constexpr int kHighSocketPriority = 6;
+  auto server = SocketServer::Bind(host, kHighSocketPriority);
   if (!server) {
     return 1;
   }

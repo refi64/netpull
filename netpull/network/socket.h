@@ -19,8 +19,12 @@ namespace netpull {
 // connection to a server from a client.
 class SocketConnection {
 public:
+  // Represents that the connection has no defined priority.
+  static constexpr int kNoPriority = -1;
+
   // Connect to the given IpLocation, returning an empty optional if the connection fails.
-  static std::optional<SocketConnection> Connect(IpLocation location);
+  static std::optional<SocketConnection> Connect(IpLocation location,
+                                                 int priority = kNoPriority);
 
   // Read size bytes (or less) from the connection, returning the number of bytes successfully
   // read, or an empty optional on failure.
@@ -85,7 +89,8 @@ public:
   SocketServer(SocketServer&& other)=default;
 
   // Bind to an IpLocation to listen for connections, returning an empty optional on failure.
-  static std::optional<SocketServer> Bind(IpLocation location);
+  static std::optional<SocketServer> Bind(IpLocation location,
+                                          int priority = SocketConnection::kNoPriority);
   // Accept a connection from a client, returning an empty optional on failure.
   std::optional<SocketConnection> Accept();
 
