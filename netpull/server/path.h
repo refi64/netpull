@@ -9,6 +9,9 @@
 #include <string_view>
 #include <type_traits>
 
+#include "netpull/assert.h"
+#include "netpull/console.h"
+
 namespace netpull {
 
 namespace path_internal {
@@ -80,7 +83,7 @@ public:
   // Returns this path relative to another path. Both paths MUST be absolute and fully
   // resolved.
   PathBase<T> RelativeTo(PathBase<std::string_view> other) const {
-    assert(IsChildOf(other));
+    NETPULL_ASSERT(IsChildOf(other), "%s is not a child of %s", path_, other.path());
     return path_.substr(other.path().size() + 1);
   }
 

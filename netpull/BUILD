@@ -17,6 +17,7 @@ cc_proto_library(
 cc_library(
   name = 'common',
   srcs = [
+    'assert.h',
     'console.h',
     'console.cc',
     'crypto.h',

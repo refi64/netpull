@@ -10,6 +10,7 @@
 
 #include <array>
 
+#include "netpull/assert.h"
 #include "netpull/console.h"
 
 #include "fast_crawler.h"
@@ -45,7 +46,8 @@ static std::optional<std::string> FindUnresolvedLinkTargetAt(int rawparentfd,
 }
 
 void FastCrawler::Visit(PathView root) {
-  assert(root.IsResolved());
+  NETPULL_ASSERT(root.IsResolved(), "Trying to visit unresolved root %s",
+                 absl::FormatStreamed(root));
 
   PumpDirectoryEntries(root, AT_FDCWD, PathView(""), root.path());
 

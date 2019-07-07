@@ -2,13 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-#include <assert.h>
 #include <sys/ioctl.h>
 
 #include <algorithm>
 #include <string>
 #include <string_view>
 
+#include "netpull/assert.h"
 #include "netpull/console.h"
 
 #include "netpull/client/progress_builder.h"
@@ -17,7 +17,8 @@ namespace netpull {
 
 ProgressBuilder::ProgressBuilder(std::string_view action, std::string_view item):
     action(action), item(item), item_utf8(Utf8WidthInformation::ForString(item)) {
-  assert(Utf8WidthInformation::ForString(action).total_width() == 1);
+  NETPULL_ASSERT(Utf8WidthInformation::ForString(action).total_width() == 1,
+                 "Action item %s is not 1 column wide", action);
 }
 
 template <typename It>

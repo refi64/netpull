@@ -15,6 +15,7 @@
 #include "absl/synchronization/notification.h"
 #include "absl/time/time.h"
 
+#include "netpull/assert.h"
 #include "netpull/console.h"
 #include "netpull/crypto.h"
 #include "netpull/netpull.pb.h"
@@ -316,7 +317,7 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
     break;
 
   default:
-    assert(false);
+    NETPULL_ASSERT(false, "Unexpected pull type %d", static_cast<int>(pull.type()));
   }
 
   if (pull.has_transfer()) {
@@ -373,7 +374,7 @@ void PrintJobResumeMessage(std::string job) {
 class SigintHandler {
 public:
   static void Activate(std::string job) {
-    assert(previous_handler == nullptr);
+    NETPULL_ASSERT(previous_handler == nullptr, "SigintHandler double-activated");
     SigintHandler::job = job;
     previous_handler = signal(SIGINT, &SigintHandler::Handle);
   }
@@ -383,7 +384,7 @@ private:
   static sighandler_t previous_handler;
 
   static void Handle(int sig) {
-    assert(sig == SIGINT);
+    NETPULL_ASSERT(sig == SIGINT, "Unexpected signal %d", sig);
     std::cerr << "\nSIGINT received. ";
     PrintJobResumeMessage(SigintHandler::job);
     signal(SIGINT, previous_handler);
@@ -481,8 +482,8 @@ int main(int argc, char** argv) {
       proto::PullResponse::PullObject pull = resp.object();
       total_items.store(std::max(total_items.load(), pull.number()));
 
-      assert(!job_id.empty());
-      assert(pull.path()[0] != '/');
+      NETPULL_ASSERT(!job_id.empty(), "Received objects before started message");
+      NETPULL_ASSERT(pull.path()[0] != '/', "Object %s has an absolute path", pull.path());
       HandleTransfer(std::move(pull), dest, destfd, server, &pool, &key, job_id, &to_complete,
                      &total_bytes_transferred, &total_items_transferred);
     } else if (resp.has_started()) {
@@ -516,8 +517,7 @@ int main(int argc, char** argv) {
     } else if (resp.has_error()) {
       LogError("Server returned error: %s", resp.error().message());
     } else {
-      LogError("Unexpected pull response from server");
-      assert(false);
+      NETPULL_ASSERT(false, "Unexpected pull response from server");
     }
   }
 

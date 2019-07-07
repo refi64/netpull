@@ -7,6 +7,7 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_split.h"
 
+#include "netpull/assert.h"
 #include "netpull/console.h"
 
 #include "path.h"
@@ -57,10 +58,10 @@ bool path_internal::IsResolved(std::string_view self) {
 }
 
 bool path_internal::IsChildOf(std::string_view self, std::string_view other) {
-  assert(IsAbsolute(self));
-  assert(IsResolved(self));
-  assert(IsAbsolute(other));
-  assert(IsResolved(other));
+  NETPULL_ASSERT(IsAbsolute(self), "%s is not absolute", self);
+  NETPULL_ASSERT(IsResolved(self), "%s is not resolved", self);
+  NETPULL_ASSERT(IsAbsolute(other), "%s is not absolute", other);
+  NETPULL_ASSERT(IsResolved(other), "%s is not resolved", other);
   return absl::StartsWith(self, other);
 }
 

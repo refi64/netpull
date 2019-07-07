@@ -532,7 +532,7 @@ int main(int argc, char** argv) {
           continue;
         }
       } else {
-        assert(false);
+        NETPULL_ASSERT(false, "???");
       }
 
       std::string id = job.id();
