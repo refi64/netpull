@@ -33,17 +33,20 @@ It PercentToStringIterator(double percent, It it) {
 
     int digit = scaled_percent / factor;
 
-    if (digit == 0) {
-      if (i < 2 && all_zeros) {
-        *it++ = ' ';
-        continue;
-      }
+    if (digit == 0 && i < 2 && all_zeros) {
+      *it++ = ' ';
     } else {
-      all_zeros = false;
+      if (digit != 0) {
+        all_zeros = false;
+      }
+
+      *it++ = digit + '0';
     }
 
-    *it++ = digit + '0';
-    scaled_percent -= digit * scaled_percent;
+    scaled_percent -= digit * factor;
+    if (scaled_percent < 0) {
+      scaled_percent = 0;
+    }
     factor /= 10;
   }
 
