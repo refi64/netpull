@@ -34,13 +34,62 @@ enum class SocketPriority {
   kMain = 4,
 };
 
+// Convert a protobuf timestamp to a timespec.
+void CopyProtoTimestampToTimespec(struct timespec* out, const google::protobuf::Timestamp& ts) {
+  out->tv_sec = ts.seconds();
+  out->tv_nsec = ts.nanos();
+}
+
+bool SetMetadata(const ScopedFd& destfd, std::string_view path,
+                 const proto::PullResponse::PullObject& pull) {
+  std::array<struct timespec, 2> times;
+  CopyProtoTimestampToTimespec(&times[0], pull.times().access());
+  CopyProtoTimestampToTimespec(&times[1], pull.times().modify());
+
+  if (utimensat(*destfd, path.data(), times.data(), AT_SYMLINK_NOFOLLOW) == -1) {
+    LogError("Failed to set timestamps of %s", path);
+    return false;
+  }
+
+  proto::PullResponse::PullObject::Ownership owner = pull.owner();
+
+  uid_t uid = owner.uid();
+  gid_t gid = owner.gid();
+
+  if (!owner.user().empty()) {
+    if (struct passwd* pwd = getpwnam(owner.user().data())) {
+      uid = pwd->pw_uid;
+    }
+  }
+
+  if (!owner.group().empty()) {
+    if (struct group* gr = getgrnam(owner.group().data())) {
+      gid = gr->gr_gid;
+    }
+  }
+
+  if (pull.type() == proto::PullResponse::PullObject::kTypeFile) {
+    if (fchmodat(*destfd, path.data(), pull.nonlink().perms(), 0) == -1) {
+      LogErrno("Failed to chmod %s to %o", path, pull.nonlink().perms());
+      return false;
+    }
+  }
+
+  if (fchownat(*destfd, path.data(), uid, gid, AT_SYMLINK_NOFOLLOW) == -1) {
+    LogErrno("Failed to chown %s to %d(%s),%d(%s)", path, uid, owner.user(), gid, owner.group());
+    return false;
+  }
+
+  return true;
+}
+
 class FileIntegrityTask : public Task {
 public:
   FileIntegrityTask(SubmissionKey* key, std::string_view& job,
-                    GuardedSet<std::string>* to_complete, const std::string& expected_digest,
+                    GuardedSet<std::string>* to_complete, proto::PullResponse::PullObject pull,
                     const ScopedFd& destfd, std::string path, const IpLocation& server):
-    Task(key), job(job), to_complete(to_complete), expected_digest(expected_digest),
-    destfd(destfd), path(path), server(server) {}
+    Task(key), job(job), to_complete(to_complete), pull(pull), destfd(destfd), path(path),
+    server(server) {}
 
   void Run(WorkerPool* pool) override {
     ScopedFd fd;
@@ -80,12 +129,17 @@ public:
     }
 
     if (auto digest = builder.Finish()) {
-      if (*digest != expected_digest) {
+      if (*digest != pull.transfer().sha256()) {
         LogError("Wrong digest %s", *digest);
-      } else {
-        to_complete->Erase(path);
+        return;
       }
     }
+
+    if (!SetMetadata(destfd, path, pull)) {
+      return;
+    }
+
+    to_complete->Erase(path);
 
     auto conn = SocketConnection::Connect(server, static_cast<int>(SocketPriority::kSuccess));
     if (!conn) {
@@ -102,45 +156,23 @@ public:
 private:
   std::string_view job;
   GuardedSet<std::string>* to_complete;
-  std::string expected_digest;
+  proto::PullResponse::PullObject pull;
   const ScopedFd& destfd;
   std::string path;
   const IpLocation& server;
 };
-
-// Convert a protobuf timestamp to a timespec.
-void CopyProtoTimestampToTimespec(struct timespec* out, const google::protobuf::Timestamp& ts) {
-  out->tv_sec = ts.seconds();
-  out->tv_nsec = ts.nanos();
-}
-
-// Set the path's timestamps (relative to destfd) from the given PullObject times.
-bool SetTimestamps(const ScopedFd& destfd, std::string_view path,
-                   const proto::PullResponse::PullObject::Times& proto_times) {
-  std::array<struct timespec, 2> times;
-  CopyProtoTimestampToTimespec(&times[0], proto_times.access());
-  CopyProtoTimestampToTimespec(&times[1], proto_times.modify());
-
-  if (utimensat(*destfd, path.data(), times.data(), AT_SYMLINK_NOFOLLOW) == -1) {
-    LogError("Failed to set timestamps of %s", path);
-    return false;
-  }
-
-  return true;
-}
 
 class FileStreamTask : public Task {
 public:
   FileStreamTask(SubmissionKey* key, std::string_view job, GuardedSet<std::string>* to_complete,
                  std::atomic<int64_t>* total_bytes_transferred,
                  std::atomic<int64_t>* total_items_transferred,
-                 proto::PullResponse::PullObject::FileTransferInfo transfer,
-                 proto::PullResponse::PullObject::Times times,
+                 proto::PullResponse::PullObject pull,
                  const ScopedFd& destfd, std::string path, const IpLocation& server):
     Task(key), job(job), to_complete(to_complete),
     total_bytes_transferred(total_bytes_transferred),
-    total_items_transferred(total_items_transferred), transfer(transfer), times(times),
-    destfd(destfd), path(std::move(path)), server(server) {}
+    total_items_transferred(total_items_transferred), pull(pull), destfd(destfd),
+    path(std::move(path)), server(server) {}
 
   void Run(WorkerPool* pool) override {
     ScopedFd fd;
@@ -163,6 +195,8 @@ public:
     if (!conn) {
       return;
     }
+
+    proto::PullResponse::PullObject::FileTransferInfo transfer = pull.transfer();
 
     proto::PullRequest req;
     proto::PullRequest::PullFile* file = req.mutable_file();
@@ -214,12 +248,8 @@ public:
     fsync(*fd);
     (*total_items_transferred)++;
 
-    if (!SetTimestamps(destfd, path, times)) {
-      return;
-    }
-
-    auto task = new FileIntegrityTask(mutable_key(), job, to_complete, transfer.sha256(),
-                                      destfd, path, server);
+    auto task = new FileIntegrityTask(mutable_key(), job, to_complete, pull, destfd, path,
+                                      server);
     pool->Submit(std::unique_ptr<Task>(task));
   }
 
@@ -228,8 +258,7 @@ private:
   GuardedSet<std::string>* to_complete;
   std::atomic<int64_t>* total_bytes_transferred;
   std::atomic<int64_t>* total_items_transferred;
-  proto::PullResponse::PullObject::FileTransferInfo transfer;
-  proto::PullResponse::PullObject::Times times;
+  proto::PullResponse::PullObject pull;
   const ScopedFd& destfd;
   std::string path;
   const IpLocation& server;
@@ -242,33 +271,30 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
                     GuardedSet<std::string>* to_complete,
                     std::atomic<int64_t>* total_bytes_transferred,
                     std::atomic<int64_t>* total_items_transferred) {
-  int open_flags = 0;
-  mode_t open_mode = 0;
-
   std::string path(pull.path());
   to_complete->Insert(path);
 
   switch (pull.type()) {
   case proto::PullResponse::PullObject::kTypeFile:
-    open_flags = O_CREAT | O_RDWR;
-    open_mode = pull.nonlink().perms();
+    // Proper permissions will be set later, after the file has been written.
+    if (int rawfd = openat(*destfd, path.data(), O_CREAT | O_RDWR, 0644);
+        rawfd != -1) {
+      close(rawfd);
+    } else {
+      LogErrno("Failed to create file %s/%s", dest, path);
+      return;
+    }
     break;
 
   case proto::PullResponse::PullObject::kTypeDirectory:
-    open_flags = O_DIRECTORY | O_RDONLY;
-
-    {
-      if (mkdirat(*destfd, path.data(), pull.nonlink().perms()) == -1 && errno != EEXIST) {
-        LogErrno("Failed to create directory %s/%s", dest, path);
-        return;
-      }
+    if (mkdirat(*destfd, path.data(), pull.nonlink().perms()) == -1 && errno != EEXIST) {
+      LogErrno("Failed to create directory %s/%s", dest, path);
+      return;
     }
 
     break;
 
   case proto::PullResponse::PullObject::kTypeSymlink:
-    open_flags = O_NOFOLLOW | O_RDONLY;
-
     {
       proto::PullResponse::PullObject::SymlinkData symlink = pull.symlink();
       std::string target;
@@ -293,45 +319,14 @@ void HandleTransfer(proto::PullResponse::PullObject pull, std::string_view dest,
     assert(false);
   }
 
-  ScopedFd fd;
-  if (int rawfd = openat(*destfd, path.data(), open_flags, open_mode); rawfd != -1) {
-    fd.reset(rawfd);
-  } else {
-    LogErrno("Failed to open %s/%s", dest, path);
-    return;
-  }
-
-  proto::PullResponse::PullObject::Ownership owner = pull.owner();
-
-  uid_t uid = owner.uid();
-  gid_t gid = owner.gid();
-
-  if (!owner.user().empty()) {
-    if (struct passwd* pwd = getpwnam(owner.user().data())) {
-      uid = pwd->pw_uid;
-    }
-  }
-
-  if (!owner.group().empty()) {
-    if (struct group* gr = getgrnam(owner.group().data())) {
-      gid = gr->gr_gid;
-    }
-  }
-
-  if (fchown(*fd, uid, gid) == -1) {
-    LogErrno("Failed to chown %s/%s", dest, path);
-  }
-
-  // TODO: times
-
   if (pull.has_transfer()) {
     auto task = new FileStreamTask(key, job, to_complete, total_bytes_transferred,
-                                   total_items_transferred, pull.transfer(), pull.times(),
-                                   destfd, std::string(path), server);
+                                   total_items_transferred, pull, destfd, std::string(path),
+                                   server);
     pool->Submit(std::unique_ptr<Task>(task));
   } else {
     (*total_items_transferred)++;
-    if (!SetTimestamps(destfd, path, pull.times())) {
+    if (!SetMetadata(destfd, path, pull)) {
       return;
     }
 
