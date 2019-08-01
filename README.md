@@ -52,7 +52,8 @@ bottleneck then you *really* need a better system.)
 In short, you likely want to run something like:
 
 `-workers` specifies the number of workers to use for file streaming or integrity checks. In
-general, you can give a pretty high value for this (e.g. 128) as long as your system can take it.
+general, you can give a pretty high value for this (e.g. 128, 256) as long as your system can
+take it.
 
 `-root` is the root directory that will be served. Pretty self-explanatory...
 
@@ -140,3 +141,25 @@ If the client or server crashes, try to get a coredump and stack trace
 (`coredumpctl debug netpull_server` or `coredumpctl debug netpull_client`), then file a bug.
 You may need to perform a debug build for that to work
 (`bazel build //... --compilation_mode=dbg`).
+
+## Known issues
+
+### Open file descriptor count
+
+Currently, the server dups quite a few fds while crawling the filesystem. You should set a
+reasonably high fd ulimit in order to work around this until its fixed in netpull.
+
+You can query the current fd ulimit with `ulimit -n` and the max open file descriptor count
+with `cat /proc/sys/fs/file-max`. To change the ulimit for your session, use
+`ulimit -n new_count`, and to change the max count, use
+`echo new_count | sudo tee /proc/sys/fs/file-max`.
+
+On my system, file-max reports 1,606,110, but the `ulimit -n` result is only 1024. Therefore,
+in order to be able to fit all the fds while having some room, I ran `ulimit -n 200000`.
+
+### Directory permissions
+
+Directory permissions are set before files are stored within. Therefore, if a directory doesn't
+have write permission, saving any files inside will fail. netpull will likely automatically
+ensure directories have rw permissions in the future; meanwhile, if you see a failure with
+opening a file, make sure the source directory is rw.
