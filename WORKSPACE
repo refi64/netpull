@@ -7,9 +7,9 @@ load('@bazel_tools//tools/build_defs/repo:git.bzl', 'git_repository', 'new_git_r
 git_repository(
   name = 'bazel_skylib',
   remote = 'https://github.com/bazelbuild/bazel-skylib',
-  # tag = '0.8.0',
-  commit = '3721d32c14d3639ff94320c780a60a6e658fb033',
-  shallow_since = '1553102012 +0100',
+  # tag = '0.9.0',
+  commit = '2b38b2f8bd4b8603d610cfc651fcbb299498147f',
+  shallow_since = '1562957722 -0400',
 )
 
 git_repository(
@@ -22,26 +22,26 @@ git_repository(
 
 git_repository(
   name = 'com_google_protobuf',
-  remote = 'https://github.com/google/protobuf',
-  # tag = 'v3.8.0',
-  commit = '09745575a923640154bcf307fba8aedff47f240a',
-  shallow_since = '1558721209 -0700',
+  remote = 'https://github.com/protocolbuffers/protobuf',
+  # tag = 'v3.9.0',
+  commit = '6a59a2ad1f61d9696092f79b6d74368b4d7970a3',
+  shallow_since = '1562856725 -0700',
 )
 
 git_repository(
   name = 'com_google_protobuf_cc',
-  remote = 'https://github.com/google/protobuf',
-  # tag = 'v3.8.0',
-  commit = '09745575a923640154bcf307fba8aedff47f240a',
-  shallow_since = '1558721209 -0700',
+  remote = 'https://github.com/protocolbuffers/protobuf',
+  # tag = 'v3.9.0',
+  commit = '6a59a2ad1f61d9696092f79b6d74368b4d7970a3',
+  shallow_since = '1562856725 -0700',
 )
 
 git_repository(
   name = 'com_google_absl',
   remote = 'https://github.com/abseil/abseil-cpp',
   # branch = 'master',
-  commit = 'd65e19dfcd8697076f68598c0131c6930cdcd74d',
-  shallow_since = '1561428275 -0400',
+  commit = '14550beb3b7b97195e483fb74b5efb906395c31e',
+  shallow_since = '1564603675 -0400' ,
 )
 
 new_git_repository(
