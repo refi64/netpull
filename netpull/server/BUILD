@@ -7,7 +7,7 @@ cc_binary(
   srcs = [
     'fast_crawler.h',
     'fast_crawler.cc',
-    'main.cc',
+    'netpull_server.cc',
     'path.h',
     'path.cc',
   ],

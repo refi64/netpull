@@ -5,7 +5,7 @@
 cc_binary(
   name = 'client',
   srcs = [
-    'main.cc',
+    'netpull_client.cc',
     'progress_builder.h',
     'progress_builder.cc',
     'utf8.h',

@@ -22,6 +22,7 @@
 #include "absl/debugging/symbolize.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/strings/match.h"
 #include "absl/time/time.h"
 
@@ -442,6 +443,8 @@ int main(int argc, char** argv) {
   absl::InitializeSymbolizer(argv[0]);
   absl::FailureSignalHandlerOptions signal_options;
   absl::InstallFailureSignalHandler(signal_options);
+
+  absl::SetProgramUsageMessage("Server for the netpull network file transfer system.");
 
   GOOGLE_PROTOBUF_VERIFY_VERSION;
   signal(SIGPIPE, SIG_IGN);
