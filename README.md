@@ -157,6 +157,13 @@ with `cat /proc/sys/fs/file-max`. To change the ulimit for your session, use
 On my system, file-max reports 1,606,110, but the `ulimit -n` result is only 1024. Therefore,
 in order to be able to fit all the fds while having some room, I ran `ulimit -n 200000`.
 
+### Local port range
+
+If you are pulling a very, very large directory with many small files, you may get
+`Address not available [error 99]`. In this case, you should try [increasing your TCP port
+range](https://www.cyberciti.biz/tips/linux-increase-outgoing-network-sockets-range.html). I
+actually have no idea why this happens at the moment...
+
 ### Directory permissions
 
 Directory permissions are set before files are stored within. Therefore, if a directory doesn't
